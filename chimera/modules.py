@@ -140,3 +140,123 @@ class GatedCausalConv(nn.Module):
         y = self.conv(joined).transpose(1, 2)
         next_state = joined[..., -(self.kernel - 1):] if self.kernel > 1 else joined[..., :0]
         return self.out(F.silu(y) * torch.sigmoid(gate)), next_state
+
+
+class SparseMoE(nn.Module):
+    """Top-k sans abandon de tokens, experts partagés, équilibrage et router z-loss."""
+
+    def __init__(self, config):
+        super().__init__()
+        self.n_experts, self.top_k = config.n_experts, config.top_k
+        self.router = nn.Linear(config.d_model, config.n_experts, bias=False)
+        self.experts = nn.ModuleList([
+            SwiGLU(config.d_model, config.hidden_dim) for _ in range(config.n_experts)
+        ])
+        self.shared = SwiGLU(config.d_model, config.hidden_dim * config.shared_experts)
+
+    def forward(self, x, valid):
+        flat = x.reshape(-1, x.size(-1))
+        indices = valid.reshape(-1).nonzero(as_tuple=True)[0]
+        tokens = flat[indices]
+        if tokens.size(0) == 0:
+            zero = x.sum() * 0
+            return torch.zeros_like(x), zero, zero, x.new_zeros(self.n_experts)
+        # Router en fp32 pour éviter la saturation en bf16/fp16.
+        with torch.autocast(device_type=tokens.device.type, enabled=False):
+            scores = F.linear(tokens.float(), self.router.weight.float())
+            probs = scores.softmax(-1)
+        weights, selected = probs.topk(self.top_k, dim=-1)
+        weights = weights / weights.sum(-1, keepdim=True)
+        mixed = self.shared(tokens)
+        for expert_id, expert in enumerate(self.experts):
+            rows, slots = torch.where(selected == expert_id)
+            # Un expert vide reste un graphe valide, sans traitement de tokens inutiles.
+            if rows.numel():
+                expert_output = expert(tokens[rows])
+                contribution = expert_output * weights[rows, slots, None].to(expert_output.dtype)
+                mixed = mixed.index_add(0, rows, contribution)
+        result = torch.zeros_like(flat).index_copy(0, indices, mixed.to(flat.dtype)).view_as(x)
+        fraction = F.one_hot(selected, self.n_experts).float().mean((0, 1))
+        balance = self.n_experts * (probs.mean(0) * fraction).sum()
+        z_loss = scores.logsumexp(-1).square().mean()
+        return result, balance, z_loss, fraction.detach()
+
+
+class EncoderBlock(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.norm1, self.norm2 = RMSNorm(config.d_model), RMSNorm(config.d_model)
+        self.attn = GroupedQueryAttention(config, causal=False)
+        self.ffn = SwiGLU(config.d_model, config.hidden_dim)
+        self.dropout = nn.Dropout(config.dropout)
+
+    def forward(self, x, valid):
+        x = x + self.dropout(self.attn(self.norm1(x), valid)[0])
+        return (x + self.dropout(self.ffn(self.norm2(x)))) * valid.unsqueeze(-1)
+
+
+class VisionEncoder(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        d = config.d_model
+        self.stem = nn.Conv2d(config.image_channels, d // 2, 3, padding=1)
+        self.local3 = nn.Conv2d(d // 2, d // 2, 3, padding=1, groups=d // 2)
+        self.local5 = nn.Conv2d(d // 2, d // 2, 5, padding=2, groups=d // 2)
+        self.patch = nn.Conv2d(d // 2, d, config.patch_size, stride=config.patch_size)
+        grid = config.image_size // config.patch_size
+        self.position = nn.Parameter(torch.empty(1, grid * grid, d))
+        self.blocks = nn.ModuleList([EncoderBlock(config) for _ in range(config.vision_layers)])
+        self.norm = RMSNorm(d, config.norm_eps)
+
+    def forward(self, images):
+        x = F.silu(self.stem(images.to(self.stem.weight.dtype)))
+        x = x + F.silu(self.local3(x)) + F.silu(self.local5(x))
+        x = self.patch(x).flatten(2).transpose(1, 2) + self.position
+        valid = torch.ones(x.shape[:2], dtype=torch.bool, device=x.device)
+        for block in self.blocks:
+            x = block(x, valid)
+        return self.norm(x), valid
+
+
+class TemporalEncoder(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.proj = nn.Linear(2 * config.series_features, config.d_model)
+        self.conv = GatedCausalConv(config.d_model, config.conv_kernel)
+        self.blocks = nn.ModuleList([EncoderBlock(config) for _ in range(config.temporal_layers)])
+        self.norm = RMSNorm(config.d_model, config.norm_eps)
+        self.forecast_context = config.forecast_context
+        self.forecast_skip = nn.Linear(config.forecast_context, config.forecast_horizon, bias=False)
+
+    def forward(self, series, valid):
+        series = series.float()
+        observed = torch.isfinite(series) & valid.unsqueeze(-1)
+        clean = torch.where(observed, series, 0.0)
+        observed_count = observed.sum(1, keepdim=True)
+        count = observed_count.clamp_min(1)
+        mean = clean.sum(1, keepdim=True) / count
+        centered = torch.where(observed, clean - mean, 0.0)
+        scale = (centered.square().sum(1, keepdim=True) / count + 1e-5).sqrt()
+        scale = torch.where(observed_count > 0, scale, torch.ones_like(scale))
+        # Les valeurs manquantes sont représentées explicitement et ne polluent pas RevIN.
+        features = torch.cat((centered / scale, observed.to(series.dtype)), dim=-1)
+        x = self.proj(features.to(self.proj.weight.dtype))
+        x = x * valid.unsqueeze(-1)
+        x = x + self.conv(x, valid)[0]
+        for block in self.blocks:
+            x = block(x, valid)
+        # Connexion temporelle directe : partir de la persistance puis apprendre
+        # une correction multihorizon sur l'historique centré à la dernière observation.
+        positions = torch.arange(series.size(1), device=series.device)[None, :, None]
+        last_index = positions.expand_as(series).masked_fill(~observed, -1).max(1).values
+        anchor = clean.gather(1, last_index.clamp_min(0).unsqueeze(1)).squeeze(1)
+        anchor = torch.where(last_index >= 0, anchor, mean.squeeze(1))
+        centered_last = torch.where(observed, (clean - anchor[:, None]) / scale, 0.0)
+        histories = []
+        for row in range(series.size(0)):
+            history = centered_last[row, valid[row]].transpose(0, 1).unsqueeze(0)
+            histories.append(F.adaptive_avg_pool1d(history, self.forecast_context).squeeze(0))
+        history = torch.stack(histories)
+        correction = self.forecast_skip(history.to(self.forecast_skip.weight.dtype)).transpose(1, 2)
+        baseline = anchor[:, None] + correction * scale
+        return self.norm(x), valid, mean.squeeze(1), scale.squeeze(1), baseline

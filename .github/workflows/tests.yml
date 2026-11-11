@@ -1,0 +1,38 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  cpu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.14']
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Install CPU dependencies
+        run: |
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e '.[vision]'
+      - name: Unit and integration tests
+        run: python -m unittest discover -s tests -v
+      - name: Inspect all architecture presets without allocating weights
+        run: python -m chimera inspect --all
+      - name: Distributed validation smoke test
+        run: |
+          torchrun --standalone --nproc-per-node=2 -m chimera --threads 1 train \
+            --preset tiny --steps 3 --batch-size 2 --accumulation 2 \
+            --eval-every 1 --output runs/ci-ddp

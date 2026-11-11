@@ -1,14 +1,38 @@
 import argparse
+from contextlib import contextmanager
 import json
+import os
 from pathlib import Path
+import sys
+import tempfile
 
 import torch
+from torch.utils.data import DataLoader
 
 from .config import ChimeraConfig
 from .data import JointDataset, collate_records, synthetic_batch
 from .model import Chimera
 from .tokenizer import ByteTokenizer
-from .training import load_checkpoint, save_checkpoint, train
+from .training import evaluate, load_checkpoint, save_checkpoint, train
+
+
+@contextmanager
+def prediction_stream(path):
+    if path is None:
+        yield sys.stdout
+        return
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=path.name + ".", suffix=".tmp", delete=False) as stream:
+            temporary = Path(stream.name)
+            yield stream
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def inspect_config(config):
@@ -92,6 +116,13 @@ def main(argv=None):
     export = commands.add_parser("export", help="Exporter les poids sans l'optimiseur pour l'inférence")
     export.add_argument("--checkpoint", required=True)
     export.add_argument("--output", required=True)
+    evaluation = commands.add_parser("evaluate", help="Évaluer un checkpoint sur un fichier JSONL indépendant")
+    evaluation.add_argument("--checkpoint", required=True)
+    evaluation.add_argument("--data", required=True)
+    evaluation.add_argument("--batch-size", type=int, default=4)
+    evaluation.add_argument("--device", default="cpu")
+    evaluation.add_argument("--amp", choices=("none", "bf16", "fp16"), default="none")
+    evaluation.add_argument("--output")
     args = parser.parse_args(argv)
     if args.threads < 1:
         parser.error("threads doit être > 0")
@@ -146,11 +177,13 @@ def main(argv=None):
     elif args.command == "predict":
         if args.max_new_tokens < 0:
             parser.error("max-new-tokens doit être >= 0")
+        if args.output and Path(args.output).resolve() == Path(args.data).resolve():
+            parser.error("Le fichier de prédictions doit être distinct du fichier d'entrée")
         model, _ = load_checkpoint(args.checkpoint, args.device)
         model.eval()
         dataset = JointDataset(args.data, model.config)
-        rows = []
-        with torch.inference_mode():
+        count = 0
+        with prediction_stream(args.output) as stream, torch.inference_mode():
             for index in range(len(dataset)):
                 batch = {key: value.to(args.device) for key, value in collate_records([dataset[index]]).items()
                          if key not in ("labels", "class_labels", "forecast_targets")}
@@ -171,21 +204,31 @@ def main(argv=None):
                     generated = model.generate(prompt, max_new_tokens=args.max_new_tokens,
                                                temperature=0, **context)
                     row["generated_text"] = ByteTokenizer().decode(generated[0])
-                rows.append(json.dumps(row, ensure_ascii=False))
-        content = "\n".join(rows) + "\n"
+                stream.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n")
+                count += 1
+        if args.output:
+            print(f"{count} prédictions écrites dans {args.output}")
+    elif args.command == "export":
+        model, payload = load_checkpoint(args.checkpoint)
+        step = payload["step"]
+        trainer = dict(payload.get("trainer", {}), inference_only=True)
+        del payload
+        save_checkpoint(args.output, model, step=step, trainer=trainer)
+        print(f"Poids d'inférence écrits dans {args.output}")
+    elif args.command == "evaluate":
+        if args.batch_size < 1:
+            parser.error("batch-size doit être > 0")
+        model, _ = load_checkpoint(args.checkpoint, args.device)
+        dataset = JointDataset(args.data, model.config)
+        loader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=collate_records,
+                            generator=torch.Generator().manual_seed(0))
+        report = evaluate(model, loader, args.amp)
+        content = json.dumps(report, indent=2, allow_nan=False) + "\n"
         if args.output:
             path = Path(args.output)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
-            print(f"{len(rows)} prédictions écrites dans {path}")
-        else:
-            print(content, end="")
-    elif args.command == "export":
-        model, payload = load_checkpoint(args.checkpoint)
-        step = payload["step"]
-        del payload
-        save_checkpoint(args.output, model, step=step, trainer={"inference_only": True})
-        print(f"Poids d'inférence écrits dans {args.output}")
+        print(content, end="")
 
 
 if __name__ == "__main__":

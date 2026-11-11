@@ -1,0 +1,31 @@
+test_all_seven_modality_combinations (test_chimera.ChimeraTests.test_all_seven_modality_combinations) ... ok
+test_atomic_checkpoint_roundtrip (test_chimera.ChimeraTests.test_atomic_checkpoint_roundtrip) ... ok
+test_cache_matches_full_across_sliding_window (test_chimera.ChimeraTests.test_cache_matches_full_across_sliding_window) ... ok
+test_cached_left_padding (test_chimera.ChimeraTests.test_cached_left_padding) ... ok
+test_checkpointed_gradients_equal_regular (test_chimera.ChimeraTests.test_checkpointed_gradients_equal_regular) ... ok
+test_cpu_bf16_backward (test_chimera.ChimeraTests.test_cpu_bf16_backward) ... ok
+test_entire_missing_feature_has_neutral_scale (test_chimera.ChimeraTests.test_entire_missing_feature_has_neutral_scale) ... ok
+test_forecast_connection_starts_at_last_observation (test_chimera.ChimeraTests.test_forecast_connection_starts_at_last_observation) ... ok
+test_future_tokens_cannot_change_past_logits (test_chimera.ChimeraTests.test_future_tokens_cannot_change_past_logits) ... ok
+test_generation_restores_mode_and_uses_modalities (test_chimera.ChimeraTests.test_generation_restores_mode_and_uses_modalities) ... ok
+test_ignored_targets_are_finite (test_chimera.ChimeraTests.test_ignored_targets_are_finite) ... ok
+test_inspection_counts_tied_weights_once (test_chimera.ChimeraTests.test_inspection_counts_tied_weights_once) ... ok
+test_invalid_configuration (test_chimera.ChimeraTests.test_invalid_configuration) ... ok
+test_invalid_inputs_have_explicit_errors (test_chimera.ChimeraTests.test_invalid_inputs_have_explicit_errors) ... ok
+test_joint_backward_reaches_every_branch (test_chimera.ChimeraTests.test_joint_backward_reaches_every_branch) ... ok
+test_jsonl_loader_variable_lengths (test_chimera.ChimeraTests.test_jsonl_loader_variable_lengths) ... ok
+test_jsonl_null_is_missing (test_chimera.ChimeraTests.test_jsonl_null_is_missing) ... ok
+test_modalities_change_text_and_prediction (test_chimera.ChimeraTests.test_modalities_change_text_and_prediction) ... ok
+test_optimizer_learns_all_three_losses (test_chimera.ChimeraTests.test_optimizer_learns_all_three_losses) ... ok
+test_png_loading_resizes_and_normalizes (test_chimera.ChimeraTests.test_png_loading_resizes_and_normalizes) ... ok
+test_quantiles_never_cross (test_chimera.ChimeraTests.test_quantiles_never_cross) ... ok
+test_resume_matches_uninterrupted_with_dropout (test_chimera.ChimeraTests.test_resume_matches_uninterrupted_with_dropout) ... ok
+test_series_padding_and_missing_values (test_chimera.ChimeraTests.test_series_padding_and_missing_values) ... ok
+test_temporal_connection_learns_beyond_persistence (test_chimera.ChimeraTests.test_temporal_connection_learns_beyond_persistence) ... ok
+test_text_padding_does_not_change_losses (test_chimera.ChimeraTests.test_text_padding_does_not_change_losses) ... ok
+test_utf8_roundtrip (test_chimera.ChimeraTests.test_utf8_roundtrip) ... ok
+
+----------------------------------------------------------------------
+Ran 26 tests in 8.412s
+
+OK

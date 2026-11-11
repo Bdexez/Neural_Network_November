@@ -1,0 +1,12 @@
+{
+  "tests_run": 26,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "success": true,
+  "seconds": 8.423,
+  "python": "3.14.8",
+  "torch": "2.15.0+cpu",
+  "platform": "Linux-6.18.59-1-lts-x86_64-with-glibc2.44",
+  "cuda_available": false
+}

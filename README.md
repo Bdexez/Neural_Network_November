@@ -89,3 +89,141 @@ Les fichiers de [configuration](configs/) permettent de modifier dimensions, pro
 ```bash
 .venv/bin/python -m chimera inspect --config configs/workstation.json
 ```
+
+## Entraînement conjoint
+
+```bash
+# Vérification rapide sur CPU
+.venv/bin/python -m chimera train --preset tiny --steps 100 --output runs/tiny
+
+# Exécution utilisée pour le modèle livré
+.venv/bin/python -m chimera --threads 4 train \
+  --preset workstation --steps 240 --batch-size 8 --warmup 20 \
+  --lr 0.0002 --modality-dropout 0.3 \
+  --output runs/workstation --log-every 20 --save-every 60
+
+# Mesure avant/après sur 64 exemples synthétiques indépendants
+.venv/bin/python tools/benchmark.py --checkpoint runs/workstation/latest.pt
+
+# Produire un petit jeu JSONL multimodal reproductible
+.venv/bin/python tools/make_dataset.py --preset tiny --output runs/data
+
+# Entraîner sur ses propres données et valider sur un fichier distinct
+.venv/bin/python -m chimera train --preset tiny --steps 100 \
+  --data runs/data/train.jsonl --val-data runs/data/validation.jsonl \
+  --output runs/custom
+
+# Classer, prévoir et générer sur un fichier de nouvelles entrées
+.venv/bin/python -m chimera predict --checkpoint runs/custom/latest.pt \
+  --data runs/data/validation.jsonl --max-new-tokens 24 \
+  --output runs/custom/predictions.jsonl
+
+# Exporter les poids seuls pour réduire la taille et la mémoire de chargement
+.venv/bin/python -m chimera export --checkpoint runs/custom/latest.pt \
+  --output runs/custom/model.pt
+```
+
+La perte totale combine les pertes de texte, classification et prévision, la prédiction auxiliaire de tokens, l'alignement et la régularisation des experts. Les poids sont configurables. La projection temporelle directe part de la dernière observation disponible par variable et apprend une correction, avec un taux d'apprentissage dix fois supérieur au réseau principal. `--modality-dropout` omet des entrées pour apprendre aussi avec des modalités absentes. La perte totale des logs peut alors porter sur des ensembles de tâches différents d'une étape à l'autre ; comparer les mesures de validation à modalités fixes.
+
+Le trainer propose AdamW, échauffement et décroissance cosinus du taux d'apprentissage, accumulation des gradients, écrêtage, AMP BF16/FP16 et recalcul d'activations. Il écrit `config.json`, `metrics.jsonl`, `evaluation.json` et `latest.pt` sous le dossier choisi. Les logs contiennent l'utilisation de chaque expert. Les sauvegardes sont remplacées atomiquement et incluent le modèle, AdamW, le scaler, les RNG et le planning.
+
+Reprise exacte sur un processus, en conservant les mêmes arguments de planning et de données :
+
+```bash
+.venv/bin/python -m chimera train --preset tiny --steps 100 \
+  --stop-after 40 --output runs/resumable
+.venv/bin/python -m chimera train --preset tiny --steps 100 \
+  --resume runs/resumable/latest.pt --output runs/resumable
+```
+
+La suite de tests compare les poids d'une exécution continue et d'une reprise avec dropout et accumulation : ils doivent être identiques bit à bit. Conserver également le contenu du fichier de données pour reproduire exactement le flux.
+
+Entraînement distribué DDP :
+
+```bash
+# Deux processus CPU ; chemin vérifié localement
+.venv/bin/torchrun --standalone --nproc-per-node=2 -m chimera --threads 1 train \
+  --preset tiny --steps 3 --batch-size 2 --warmup 1 --accumulation 2 \
+  --output runs/ddp-smoke --log-every 1
+
+# Exemple de deux GPU avec PyTorch CUDA installé
+.venv/bin/torchrun --standalone --nproc-per-node=2 -m chimera train \
+  --preset small --device cuda --amp bf16 --steps 1000 --output runs/gpu
+```
+
+DDP réplique le modèle sur chaque processus ; il ne répartit pas les experts ni les poids entre cartes. La reprise distribuée restaure les poids et l'optimiseur mais ne garantit pas la reproduction bit à bit des RNG de chaque rang. Les configurations dépassant la mémoire d'un accélérateur nécessitent un système de partitionnement supplémentaire ; FSDP, parallélisme tensoriel et parallélisme d'experts ne sont pas implémentés ici. Les limites de contexte ne constituent pas une promesse de débit : les masques d'attention locale sont denses, et le cache conserve toutes les clés/valeurs.
+
+## Données et API
+
+Un fichier JSONL contient un objet par ligne. Les champs de modalités doivent être cohérents dans un même fichier ; chaque modalité est facultative, mais au moins une est requise. Pour entraîner, fournir du texte ou au moins une cible de classification/prévision.
+
+| Champ | Contenu |
+| --- | --- |
+| `text` | Chaîne UTF-8 ; BOS/EOS et cibles de texte ajoutés automatiquement |
+| `image` | Tableau flottant `[canaux, hauteur, largeur]`, déjà à `image_size` |
+| `image_path` | Alternative : PNG/JPEG relatif au JSONL, converti et redimensionné ; nécessite `pip install '.[vision]'` |
+| `series` | Historique `[temps, series_features]`, du plus ancien au plus récent |
+| `class_label` | Classe entière de `0` à `num_classes - 1` ; `-100` pour ignorer |
+| `future` | Cible `[forecast_horizon, series_features]`, strictement après l'historique |
+
+Les textes longs sont tronqués à `max_seq_len` en conservant EOS. Les historiques trop longs sont refusés pour éviter une troncature silencieuse. `null` dans un tableau numérique est converti en valeur manquante par l'outil de génération/chargement ; les tenseurs d'historique acceptent NaN. Les cibles de prévision non finies sont ignorées dans la perte.
+
+Utiliser directement les tenseurs :
+
+```python
+import torch
+from chimera import ByteTokenizer, Chimera, ChimeraConfig
+
+config = ChimeraConfig.preset("tiny")
+model = Chimera(config)
+tokenizer = ByteTokenizer()
+tokens = torch.tensor([tokenizer.encode("Décris ce signal.")])
+
+result = model(
+    tokens,
+    images=torch.rand(1, 3, 32, 32),
+    series=torch.randn(1, 24, 3),
+    labels=tokens,                         # décalage causal effectué par le modèle
+    class_labels=torch.tensor([2]),
+    forecast_targets=torch.randn(1, 12, 3),
+)
+result.loss.backward()
+print(result.logits.shape)                  # [1, tokens, 260]
+print(result.classification_logits.shape)   # [1, 6]
+print(result.forecast.shape)                # [1, 12, 3, 3] : q10, q50, q90
+
+model.eval()
+with torch.inference_mode():
+    vision = model(images=torch.rand(1, 3, 32, 32))
+    temporal = model(series=torch.randn(1, 24, 3))
+    # Le futur peut aussi être conditionné sur une image et/ou du texte.
+```
+
+La classe de vision correspond aux étiquettes du jeu d'entraînement ; le modèle ne produit pas de nouvelles images. Les intervalles de prévision sont des quantiles appris, pas des garanties de couverture statistique. `attention_mask` et `series_mask` sont binaires `[B, T]`. Les valeurs manquantes par variable sont représentées explicitement. Les positions de padding ne participent pas au routage ni aux pertes de texte.
+
+Génération avec cache clé/valeur **et** état de convolution :
+
+```bash
+.venv/bin/python -m chimera generate --checkpoint runs/workstation/model.pt \
+  --prompt "Signal de classe " --max-new-tokens 32 --temperature 0
+```
+
+`model.generate(...)` accepte aussi `images=` et `series=` ; le contexte est calculé une seule fois. Température, top-k, top-p et arrêt EOS sont disponibles. Les batches de génération de longueurs différentes utilisent du padding à gauche. Le cache est réservé à l'inférence et sa longueur reste limitée par `max_seq_len`.
+
+## Fichiers utiles
+
+- [Modèle et pertes](chimera/model.py), [briques du réseau](chimera/modules.py), [configuration](chimera/config.py).
+- [Entraînement et sauvegardes](chimera/training.py), [données](chimera/data.py), [CLI](chimera/cli.py).
+- [Tests](tests/test_chimera.py), [protocole de mesure](tools/benchmark.py), [comptages exacts](artifacts/architectures.json).
+- [Rapport de validation](VALIDATION.md).
+
+## Références
+
+Cette implémentation combine des idées existantes ; ce n'est pas une reproduction des modèles de ces articles.
+
+- [GQA — Ainslie et al.](https://arxiv.org/abs/2305.13245) : groupes de têtes clé/valeur.
+- [RoFormer — Su et al.](https://arxiv.org/abs/2104.09864) : positions rotatives.
+- [Switch Transformers — Fedus et al.](https://arxiv.org/abs/2101.03961) : routage et équilibrage des experts.
+- [ST-MoE — Zoph et al.](https://arxiv.org/abs/2202.08906) : stabilité du routage.
+- [Perceiver IO — Jaegle et al.](https://arxiv.org/abs/2107.14795) : compression et interrogation d'espaces latents.
+- [Attention SDPA de PyTorch](https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention) et [recalcul d'activations](https://docs.pytorch.org/docs/stable/checkpoint).

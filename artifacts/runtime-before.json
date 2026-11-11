@@ -1,0 +1,28 @@
+{
+  "torch_version": "2.15.0+cpu",
+  "threads": 2,
+  "cache": {
+    "preset": "tiny",
+    "prefill_tokens": 96,
+    "decoded_tokens": 64,
+    "seconds": 0.12748189699777868,
+    "cached_tokens_per_layer": [
+      160,
+      160,
+      160
+    ],
+    "self_attention_kv_bytes": 122880,
+    "context_projections_per_layer": [
+      65,
+      65,
+      65
+    ],
+    "last_logits_checksum": 2.049600627273321
+  },
+  "dataset": {
+    "examples": 1000,
+    "file_bytes": 15643000,
+    "peak_python_bytes": 120804440,
+    "seconds": 1.2184563189985056
+  }
+}

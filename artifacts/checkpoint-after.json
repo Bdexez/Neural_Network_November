@@ -1,0 +1,11 @@
+{
+  "torch_version": "2.15.0+cpu",
+  "threads": 2,
+  "checkpoint": {
+    "seconds": 0.6654876139982662,
+    "peak_rss_mib": 344.90625,
+    "parameters": 549485298,
+    "step": 240,
+    "scope": "Checkpoint loading only, before inference; mmap pages are read on demand."
+  }
+}

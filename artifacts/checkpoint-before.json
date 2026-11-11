@@ -1,0 +1,6 @@
+{
+  "seconds": 3.9416859390003083,
+  "peak_rss_mib": 4457.4921875,
+  "parameters": 549485298,
+  "scope": "Checkpoint loading only before inference, original loader with default CPU thread settings."
+}

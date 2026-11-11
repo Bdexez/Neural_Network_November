@@ -50,7 +50,7 @@ def main():
     if min(args.batches, args.batch_size, args.threads) < 1:
         parser.error("batches, batch-size et threads doivent être > 0")
     torch.set_num_threads(args.threads)
-    payload = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
+    payload = torch.load(args.checkpoint, map_location="cpu", weights_only=True, mmap=True)
     config = ChimeraConfig.from_dict(payload["config"])
     step = payload["step"]
     seed = payload.get("trainer", {}).get("seed", 42)

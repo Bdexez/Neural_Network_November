@@ -2,6 +2,8 @@
 
 Mesures effectuées le 11 novembre 2026 sur CPU, avec Python 3.14.8 et PyTorch 2.15.0+cpu. Aucun GPU utilisable n'est disponible sur cette machine.
 
+Ce rapport conserve les résultats de l'entraînement initial et de ses 26 tests. La version améliorée passe 40 tests ; ses mesures de mémoire, ses vérifications de reprise et la comparaison avec le checkpoint initial sont décrites dans [IMPROVEMENTS.md](IMPROVEMENTS.md).
+
 ## Ce qui a réellement été exécuté
 
 - Réseau `workstation` de **549 485 298 paramètres** : entraînement conjoint pendant **240 étapes**, batch de 8, sans poids préentraînés.

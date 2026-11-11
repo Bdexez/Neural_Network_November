@@ -8,6 +8,8 @@ Le checkpoint livré apprend sur des signaux synthétiques associés à des imag
 
 Les checkpoints sous `runs/` sont disponibles dans l'espace de travail local et sont exclus de Git en raison de leur taille. Après un nouveau clone, les commandes d'entraînement ci-dessous permettent de les recréer ; les rapports de validation sont inclus dans le dépôt.
 
+Les [améliorations mesurées](IMPROVEMENTS.md) décrivent le cache borné, le chargement des poids à la demande, le lecteur JSONL indexé et le suivi de validation.
+
 ## Démarrage
 
 Python 3.11 ou plus récent. Dans cet espace de travail, `.venv` contient déjà PyTorch CPU.
@@ -111,21 +113,29 @@ Les fichiers de [configuration](configs/) permettent de modifier dimensions, pro
 # Entraîner sur ses propres données et valider sur un fichier distinct
 .venv/bin/python -m chimera train --preset tiny --steps 100 \
   --data runs/data/train.jsonl --val-data runs/data/validation.jsonl \
-  --output runs/custom
+  --eval-every 10 --patience 5 --min-delta 0.001 --output runs/custom
+
+# Mesurer le meilleur modèle sur un fichier indépendant
+.venv/bin/python -m chimera evaluate --checkpoint runs/custom/best.pt \
+  --data runs/data/validation.jsonl --output runs/custom/quality.json
 
 # Classer, prévoir et générer sur un fichier de nouvelles entrées
-.venv/bin/python -m chimera predict --checkpoint runs/custom/latest.pt \
+.venv/bin/python -m chimera predict --checkpoint runs/custom/best.pt \
   --data runs/data/validation.jsonl --max-new-tokens 24 \
   --output runs/custom/predictions.jsonl
 
 # Exporter les poids seuls pour réduire la taille et la mémoire de chargement
-.venv/bin/python -m chimera export --checkpoint runs/custom/latest.pt \
+.venv/bin/python -m chimera export --checkpoint runs/custom/best.pt \
   --output runs/custom/model.pt
 ```
 
 La perte totale combine les pertes de texte, classification et prévision, la prédiction auxiliaire de tokens, l'alignement et la régularisation des experts. Les poids sont configurables. La projection temporelle directe part de la dernière observation disponible par variable et apprend une correction, avec un taux d'apprentissage dix fois supérieur au réseau principal. `--modality-dropout` omet des entrées pour apprendre aussi avec des modalités absentes. La perte totale des logs peut alors porter sur des ensembles de tâches différents d'une étape à l'autre ; comparer les mesures de validation à modalités fixes.
 
-Le trainer propose AdamW, échauffement et décroissance cosinus du taux d'apprentissage, accumulation des gradients, écrêtage, AMP BF16/FP16 et recalcul d'activations. Il écrit `config.json`, `metrics.jsonl`, `evaluation.json` et `latest.pt` sous le dossier choisi. Les logs contiennent l'utilisation de chaque expert. Les sauvegardes sont remplacées atomiquement et incluent le modèle, AdamW, le scaler, les RNG et le planning.
+Le trainer propose AdamW, échauffement et décroissance cosinus du taux d'apprentissage, accumulation des gradients, écrêtage, AMP BF16/FP16 et recalcul d'activations. Il écrit `config.json`, `metrics.jsonl`, `validation.jsonl`, `evaluation.json`, `latest.pt` et `best.pt`. Les logs contiennent l'utilisation de chaque expert et les mises à jour ignorées par GradScaler en cas d'overflow. Les sauvegardes sont remplacées atomiquement et incluent le modèle, AdamW, le scaler, les RNG, le planning et l'état de validation.
+
+`--eval-every` règle la fréquence de validation, et `best.pt` conserve toujours la plus petite perte de validation observée. `--patience` active l'arrêt après un nombre de validations sans progrès significatif ; `--min-delta` définit ce progrès. L'arrêt anticipé nécessite `--val-data`. Sans fichier de validation, les mesures portent sur un lot synthétique fixe et l'arrêt anticipé reste désactivé par défaut. Les décisions d'arrêt sont partagées entre les processus DDP.
+
+Les fichiers d'entraînement sont mélangés de façon reproductible à chaque époque ; `--no-shuffle` conserve leur ordre. `--workers 2` active deux processus de lecture. Une reprise d'un ancien checkpoint conserve son ancien ordre de lecture par défaut.
 
 Reprise exacte sur un processus, en conservant les mêmes arguments de planning et de données :
 
@@ -136,7 +146,7 @@ Reprise exacte sur un processus, en conservant les mêmes arguments de planning 
   --resume runs/resumable/latest.pt --output runs/resumable
 ```
 
-La suite de tests compare les poids d'une exécution continue et d'une reprise avec dropout et accumulation : ils doivent être identiques bit à bit. Conserver également le contenu du fichier de données pour reproduire exactement le flux.
+La suite de tests compare les poids d'une exécution continue et d'une reprise avec dropout, accumulation, mélange des données et arrêt anticipé : ils doivent être identiques bit à bit. Les empreintes SHA-256 des JSONL d'entraînement et de validation sont conservées dans les nouveaux checkpoints et vérifiées à la reprise. Les fichiers d'images externes référencés par `image_path` doivent également rester identiques ; leur contenu n'entre pas dans l'empreinte du JSONL.
 
 Entraînement distribué DDP :
 
@@ -151,11 +161,13 @@ Entraînement distribué DDP :
   --preset small --device cuda --amp bf16 --steps 1000 --output runs/gpu
 ```
 
-DDP réplique le modèle sur chaque processus ; il ne répartit pas les experts ni les poids entre cartes. La reprise distribuée restaure les poids et l'optimiseur mais ne garantit pas la reproduction bit à bit des RNG de chaque rang. Les configurations dépassant la mémoire d'un accélérateur nécessitent un système de partitionnement supplémentaire ; FSDP, parallélisme tensoriel et parallélisme d'experts ne sont pas implémentés ici. Les limites de contexte ne constituent pas une promesse de débit : les masques d'attention locale sont denses, et le cache conserve toutes les clés/valeurs.
+DDP réplique le modèle sur chaque processus ; il ne répartit pas les experts ni les poids entre cartes. La reprise distribuée restaure les poids et l'optimiseur mais ne garantit pas la reproduction bit à bit des RNG de chaque rang. Les configurations dépassant la mémoire d'un accélérateur nécessitent un système de partitionnement supplémentaire ; FSDP, parallélisme tensoriel et parallélisme d'experts ne sont pas implémentés ici. Les masques d'attention locale restent denses pendant le préremplissage et le traitement de plusieurs nouveaux tokens. Pendant la génération, les couches locales ne conservent que `sliding_window - 1` anciennes positions ; les couches globales gardent le contexte complet. Les clés/valeurs du contexte multimodal sont projetées une seule fois par couche.
 
 ## Données et API
 
 Un fichier JSONL contient un objet par ligne. Les champs de modalités doivent être cohérents dans un même fichier ; chaque modalité est facultative, mais au moins une est requise. Pour entraîner, fournir du texte ou au moins une cible de classification/prévision.
+
+Le lecteur indexe les positions des lignes et charge les exemples à la demande : il garde environ 16 octets d'index par exemple, au lieu de conserver tous les tableaux Python. Le fichier est parcouru une fois à l'ouverture pour valider les modalités et calculer son empreinte. Les erreurs de conversion indiquent le fichier et la ligne. La commande `predict` écrit les résultats progressivement et remplace son fichier de sortie uniquement après une exécution réussie.
 
 | Champ | Contenu |
 | --- | --- |
@@ -201,6 +213,8 @@ with torch.inference_mode():
 
 La classe de vision correspond aux étiquettes du jeu d'entraînement ; le modèle ne produit pas de nouvelles images. Les intervalles de prévision sont des quantiles appris, pas des garanties de couverture statistique. `attention_mask` et `series_mask` sont binaires `[B, T]`. Les valeurs manquantes par variable sont représentées explicitement. Les positions de padding ne participent pas au routage ni aux pertes de texte.
 
+`evaluate` rapporte les pertes supervisées pondérées par leurs cibles réellement observées, l'accuracy, la MAE et la RMSE du futur, la MAE par horizon, la couverture et la largeur des intervalles. Une tâche sans cible valide a des mesures de qualité `null`. La perte totale et les termes de routage/alignement restent des moyennes par exemple ; l'alignement contrastif dépend de la composition des lots.
+
 Génération avec cache clé/valeur **et** état de convolution :
 
 ```bash
@@ -210,12 +224,16 @@ Génération avec cache clé/valeur **et** état de convolution :
 
 `model.generate(...)` accepte aussi `images=` et `series=` ; le contexte est calculé une seule fois. Température, top-k, top-p et arrêt EOS sont disponibles. Les batches de génération de longueurs différentes utilisent du padding à gauche. Le cache est réservé à l'inférence et sa longueur reste limitée par `max_seq_len`.
 
+`load_checkpoint` utilise le mappage mémoire et une initialisation sur `meta` pour charger les poids sans copie complète et sans initialisation aléatoire préalable. Les pages sont lues à la demande ; la première inférence utilise ensuite la mémoire des poids consultés. `mmap=False` permet de charger un ancien fichier PyTorch qui n'utilise pas le format ZIP.
+
 ## Fichiers utiles
 
 - [Modèle et pertes](chimera/model.py), [briques du réseau](chimera/modules.py), [configuration](chimera/config.py).
 - [Entraînement et sauvegardes](chimera/training.py), [données](chimera/data.py), [CLI](chimera/cli.py).
 - [Tests](tests/test_chimera.py), [protocole de mesure](tools/benchmark.py), [comptages exacts](artifacts/architectures.json).
 - [Rapport de validation](VALIDATION.md).
+- [Améliorations et mesures de mémoire](IMPROVEMENTS.md), [profilage reproductible](tools/profile_runtime.py).
+- [CI Python 3.11 et 3.14](.github/workflows/tests.yml) : tests, inspection des presets et vérification DDP à chaque push ou pull request.
 
 ## Références
 

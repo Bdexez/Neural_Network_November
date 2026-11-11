@@ -1,0 +1,25 @@
+{
+  "parameters_in_saved_weights": 549485298,
+  "checkpoint_step": 240,
+  "inference_export_matches_training_weights_exactly": true,
+  "embedding_weights_tied": true,
+  "modalities": [
+    "text",
+    "image",
+    "series"
+  ],
+  "modality_combinations_executed": 7,
+  "tests_passed": 26,
+  "held_out_examples": 64,
+  "forecast_beats_persistence": true,
+  "documentation_links_resolve": true,
+  "generated_text": "Signal de classe 3.",
+  "predicted_classes": [
+    3,
+    4
+  ],
+  "target_classes": [
+    3,
+    4
+  ]
+}

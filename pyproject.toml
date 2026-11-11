@@ -12,5 +12,8 @@ dependencies = ["torch>=2.6,<3", "numpy>=1.26"]
 [project.optional-dependencies]
 vision = ["Pillow>=10"]
 
+[project.scripts]
+chimera = "chimera.cli:main"
+
 [tool.setuptools.packages.find]
 include = ["chimera*"]

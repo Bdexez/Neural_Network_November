@@ -260,3 +260,75 @@ class TemporalEncoder(nn.Module):
         correction = self.forecast_skip(history.to(self.forecast_skip.weight.dtype)).transpose(1, 2)
         baseline = anchor[:, None] + correction * scale
         return self.norm(x), valid, mean.squeeze(1), scale.squeeze(1), baseline
+
+
+class LatentResampler(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.latents = nn.Parameter(torch.empty(1, config.n_latents, config.d_model))
+        self.null_context = nn.Parameter(torch.empty(1, 1, config.d_model))
+        self.norms = nn.ModuleList([RMSNorm(config.d_model) for _ in range(config.resampler_layers)])
+        self.cross = nn.ModuleList([CrossAttention(config) for _ in range(config.resampler_layers)])
+        self.blocks = nn.ModuleList([EncoderBlock(config) for _ in range(config.resampler_layers)])
+
+    def forward(self, contexts, masks, batch_size):
+        null = self.null_context.expand(batch_size, -1, -1)
+        context = torch.cat([null, *contexts], 1)
+        valid = torch.cat([
+            torch.ones(batch_size, 1, dtype=torch.bool, device=null.device), *masks
+        ], 1)
+        x = self.latents.expand(batch_size, -1, -1)
+        latent_valid = torch.ones(x.shape[:2], dtype=torch.bool, device=x.device)
+        for norm, cross, block in zip(self.norms, self.cross, self.blocks):
+            x = x + cross(norm(x), context, valid)
+            x = block(x, latent_valid)
+        return x
+
+
+class DecoderBlock(nn.Module):
+    def __init__(self, config, index):
+        super().__init__()
+        self.norm1 = RMSNorm(config.d_model, config.norm_eps)
+        self.norm2 = RMSNorm(config.d_model, config.norm_eps)
+        self.norm3 = RMSNorm(config.d_model, config.norm_eps)
+        window = 0 if (index + 1) % config.global_every == 0 else config.sliding_window
+        self.attn = GroupedQueryAttention(config, window=window)
+        self.conv = GatedCausalConv(config.d_model, config.conv_kernel)
+        self.mix_gate = nn.Parameter(torch.zeros(config.d_model))
+        self.cross = CrossAttention(config)
+        self.cross_gate = nn.Parameter(torch.full((config.d_model,), -1.0))
+        self.moe = SparseMoE(config)
+        self.dropout = nn.Dropout(config.dropout)
+
+    def forward(self, x, valid, context, *, offset=0, cache=None):
+        h = self.norm1(x)
+        attention, (k, v, key_valid) = self.attn(h, valid, offset=offset, cache=cache)
+        local, conv_state = self.conv(h, valid, None if cache is None else cache.conv_state)
+        x = x + self.dropout(attention + torch.sigmoid(self.mix_gate) * local)
+        x = x + self.dropout(torch.sigmoid(self.cross_gate) * self.cross(self.norm2(x), context))
+        update, balance, z_loss, usage = self.moe(self.norm3(x), valid)
+        x = (x + self.dropout(update)) * valid.unsqueeze(-1)
+        return x, balance, z_loss, usage, LayerCache(k, v, key_valid, conv_state)
+
+
+class QuantileForecastHead(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.horizon, self.features = config.forecast_horizon, config.series_features
+        self.quantiles = config.quantiles
+        self.proj = nn.Sequential(
+            RMSNorm(config.d_model), nn.Linear(config.d_model, config.hidden_dim),
+            nn.SiLU(), nn.Linear(config.hidden_dim, self.horizon * self.features * len(self.quantiles)),
+        )
+
+    def forward(self, pooled, mean=None, scale=None, baseline=None):
+        raw = self.proj(pooled).view(-1, self.horizon, self.features, len(self.quantiles))
+        # Centre médian libre et incréments positifs : aucun croisement de quantiles.
+        center_index = self.quantiles.index(0.5)
+        increments = F.softplus(raw[..., 1:])
+        offsets = torch.cat((torch.zeros_like(raw[..., :1]), increments.cumsum(-1)), -1)
+        result = raw[..., :1] + offsets - offsets[..., center_index:center_index + 1]
+        if mean is not None:
+            result = result * scale[:, None, :, None]
+            result = result + (baseline.unsqueeze(-1) if baseline is not None else mean[:, None, :, None])
+        return result

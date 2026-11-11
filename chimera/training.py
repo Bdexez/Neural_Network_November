@@ -16,6 +16,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 from .config import ChimeraConfig
 from .data import JointDataset, collate_records, synthetic_batch
 from .model import Chimera
+from .modules import RotaryEmbedding
 
 
 def seed_everything(seed):
@@ -46,12 +47,18 @@ def save_checkpoint(path, model, *, optimizer=None, scaler=None, step=0, trainer
         temporary.unlink(missing_ok=True)
 
 
-def load_checkpoint(path, device="cpu"):
-    payload = torch.load(path, map_location="cpu", weights_only=True)
+def load_checkpoint(path, device="cpu", *, mmap=True):
+    payload = torch.load(path, map_location="cpu", weights_only=True, mmap=mmap)
     if payload.get("format_version") != 1:
         raise ValueError("Version de checkpoint inconnue")
-    model = Chimera(ChimeraConfig.from_dict(payload["config"]))
-    model.load_state_dict(payload["model"], strict=True)
+    with torch.device("meta"):
+        model = Chimera(ChimeraConfig.from_dict(payload["config"]))
+    model.load_state_dict(payload["model"], strict=True, assign=True)
+    # assign remplace les Parameters ; rétablir explicitement le poids partagé.
+    model.lm_head.weight = model.embedding.weight
+    for module in model.modules():
+        if isinstance(module, RotaryEmbedding):
+            module.inv_freq = module.frequencies(device="cpu")
     return model.to(device), payload
 
 

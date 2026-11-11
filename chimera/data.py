@@ -1,3 +1,5 @@
+from array import array
+import hashlib
 import json
 from pathlib import Path
 
@@ -21,33 +23,61 @@ class JointDataset(Dataset):
     """JSONL local : texte, image, historique et cibles, sans téléchargement implicite."""
 
     def __init__(self, path, config):
-        self.path = Path(path)
+        self.path = Path(path).resolve()
         self.config = config
-        self.records = []
-        for line_number, line in enumerate(self.path.read_text(encoding="utf-8").splitlines(), 1):
-            if line.strip():
+        initial_stat = self.path.stat()
+        self.offsets, self.line_numbers = array("Q"), array("Q")
+        signature = None
+        digest = hashlib.sha256()
+        with self.path.open("rb") as stream:
+            line_number = 0
+            while True:
+                offset = stream.tell()
+                line = stream.readline()
+                if not line:
+                    break
+                line_number += 1
+                digest.update(line)
+                if not line.strip():
+                    continue
                 try:
                     record = json.loads(line)
-                except json.JSONDecodeError as exc:
+                except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                     raise ValueError(f"{self.path}:{line_number}: JSON invalide") from exc
                 if not isinstance(record, dict):
                     raise ValueError(f"{self.path}:{line_number}: un objet JSON est attendu")
-                self.records.append(record)
-        if not self.records:
+                current = tuple(key in record or (key == "image" and "image_path" in record)
+                                for key in ("text", "image", "series"))
+                if not any(current):
+                    raise ValueError(f"{self.path}:{line_number}: fournir text, image/image_path ou series")
+                if signature is not None and current != signature:
+                    raise ValueError(f"{self.path}:{line_number}: les modalités doivent être identiques dans le fichier")
+                signature = current
+                self.offsets.append(offset)
+                self.line_numbers.append(line_number)
+        if not self.offsets:
             raise ValueError("Le fichier JSONL ne contient aucun exemple")
-        # Le chargement d'un batch n'invente pas de modalités absentes.
-        signatures = {tuple(key in r or (key == "image" and "image_path" in r)
-                            for key in ("text", "image", "series")) for r in self.records}
-        if len(signatures) != 1:
-            raise ValueError("Un fichier doit avoir les mêmes modalités par exemple ; séparer les jeux hétérogènes")
-        if not any(next(iter(signatures))):
-            raise ValueError("Chaque exemple doit fournir text, image/image_path ou series")
+        self.fingerprint = digest.hexdigest()
+        self._stat = self.path.stat()
+        if (self._stat.st_size, self._stat.st_mtime_ns) != (initial_stat.st_size, initial_stat.st_mtime_ns):
+            raise ValueError(f"Le jeu de données a changé pendant son indexation : {self.path}")
 
     def __len__(self):
-        return len(self.records)
+        return len(self.offsets)
 
     def __getitem__(self, index):
-        record = self.records[index]
+        stat = self.path.stat()
+        if (stat.st_size, stat.st_mtime_ns) != (self._stat.st_size, self._stat.st_mtime_ns):
+            raise ValueError(f"Le jeu de données a changé après son indexation : {self.path}")
+        with self.path.open("rb") as stream:
+            stream.seek(self.offsets[index])
+            record = json.loads(stream.readline())
+        try:
+            return self._convert(record)
+        except (ValueError, TypeError, RuntimeError, OSError) as exc:
+            raise ValueError(f"{self.path}:{self.line_numbers[index]}: {exc}") from exc
+
+    def _convert(self, record):
         item = {}
         if "text" in record:
             if not isinstance(record["text"], str):
@@ -75,6 +105,9 @@ class JointDataset(Dataset):
         if "series" in record:
             item["series"] = numeric_tensor(record["series"])
         if "class_label" in record:
+            label = record["class_label"]
+            if type(label) is not int or not (label == -100 or 0 <= label < self.config.num_classes):
+                raise ValueError("class_label doit être une classe entière valide ou -100")
             item["class_labels"] = torch.tensor(record["class_label"], dtype=torch.long)
         if "future" in record:
             item["forecast_targets"] = numeric_tensor(record["future"])

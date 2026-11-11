@@ -90,44 +90,69 @@ def drop_modalities(batch, probability):
     return result
 
 
+def step_optimizer(model, optimizer, scaler, grad_clip):
+    """Laisser GradScaler ignorer un overflow, au lieu d'arrêter l'entraînement."""
+    scaler.unscale_(optimizer)
+    norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip,
+                                         error_if_nonfinite=not scaler.is_enabled())
+    previous_scale = scaler.get_scale()
+    scaler.step(optimizer)
+    scaler.update()
+    skipped = scaler.is_enabled() and scaler.get_scale() < previous_scale
+    return float(norm) if torch.isfinite(norm) else None, skipped
 
 
 def train(args, config):
-    if args.steps < 1 or args.batch_size < 1 or args.accumulation < 1:
-        raise ValueError("steps, batch-size et accumulation doivent être > 0")
-    if args.lr <= 0 or not math.isfinite(args.lr) or args.grad_clip <= 0:
-        raise ValueError("lr et grad-clip doivent être finis et > 0")
+    if min(args.steps, args.batch_size, args.accumulation, args.save_every, args.log_every, args.eval_every) < 1:
+        raise ValueError("Les nombres d'étapes, de lots et les fréquences doivent être > 0")
+    for name in ("lr", "grad_clip", "weight_decay", "min_delta"):
+        value = getattr(args, name)
+        if not math.isfinite(value) or value < 0 or (name in ("lr", "grad_clip") and value == 0):
+            raise ValueError(f"Valeur invalide pour {name}")
+    if args.warmup < 0 or args.patience < 0 or args.workers < 0:
+        raise ValueError("warmup, patience et workers doivent être >= 0")
     if not 0 <= args.modality_dropout < 1:
         raise ValueError("modality-dropout doit appartenir à [0, 1[")
-    if args.warmup < 0 or args.weight_decay < 0 or args.save_every < 1 or args.log_every < 1:
-        raise ValueError("warmup/weight-decay doivent être >= 0 et save-every > 0")
+    if args.patience and not args.val_data:
+        raise ValueError("L'arrêt anticipé nécessite un jeu indépendant fourni par --val-data")
     world = int(os.environ.get("WORLD_SIZE", "1"))
     rank = int(os.environ.get("RANK", "0"))
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     device = torch.device(args.device)
+    if args.amp == "fp16" and device.type != "cuda":
+        raise ValueError("fp16 nécessite CUDA ; utiliser bf16 ou none sur CPU")
     if world > 1:
         if device.type == "cuda":
             torch.cuda.set_device(local_rank)
             device = torch.device("cuda", local_rank)
         dist.init_process_group("nccl" if device.type == "cuda" else "gloo")
-    if args.amp == "fp16" and device.type != "cuda":
-        raise ValueError("fp16 nécessite CUDA ; utiliser bf16 ou none sur CPU")
     seed_everything(args.seed)
     if args.resume:
         model, payload = load_checkpoint(args.resume, device)
         if "optimizer" not in payload:
             raise ValueError("Une reprise nécessite le checkpoint complet latest.pt avec son optimiseur")
-        config = model.config
-        start = payload["step"]
+        config, start = model.config, payload["step"]
         previous = payload.get("trainer", {})
-        # Une reprise exacte conserve l'ordonnancement et le flux des données.
-        for name in ("steps", "batch_size", "accumulation", "seed", "lr", "warmup",
-                     "weight_decay", "amp", "data", "world_size", "modality_dropout"):
-            current = world if name == "world_size" else getattr(args, name)
+    else:
+        model, payload, previous, start = Chimera(config).to(device), {}, {}, 0
+    args.shuffle = (previous.get("shuffle", False) if args.resume else True) if args.shuffle is None else args.shuffle
+    keys = ("steps", "batch_size", "accumulation", "seed", "lr", "warmup", "weight_decay",
+            "amp", "data", "modality_dropout", "shuffle", "val_data", "eval_every", "patience", "min_delta")
+    trainer = {key: getattr(args, key) for key in keys}
+    trainer["world_size"] = world
+    dataset = JointDataset(args.data, config) if args.data else None
+    validation = JointDataset(args.val_data, config) if args.val_data else None
+    trainer["data_fingerprint"] = dataset.fingerprint if dataset is not None else None
+    trainer["validation_fingerprint"] = validation.fingerprint if validation is not None else None
+    if args.resume:
+        for name, current in trainer.items():
             if name in previous and previous[name] != current:
                 raise ValueError(f"Reprise : {name} diffère du checkpoint ({previous[name]!r})")
-    else:
-        model, payload, start = Chimera(config).to(device), {}, 0
+    state = dict(previous.get("validation_state", {"best_loss": float("inf"), "bad_evaluations": 0, "best_step": None}))
+    trainer["validation_state"] = state
+    end_step = min(args.steps, args.stop_after) if args.stop_after is not None else args.steps
+    if end_step < start or end_step < 1:
+        raise ValueError("stop-after doit être >= à l'étape reprise et > 0")
     temporal_parameters = list(model.temporal.forecast_skip.parameters())
     temporal_ids = {id(p) for p in temporal_parameters}
     optimizer = torch.optim.AdamW([
@@ -144,43 +169,39 @@ def train(args, config):
         random.setstate(payload["python_rng"])
         if device.type == "cuda" and payload["cuda_rng"]:
             torch.cuda.set_rng_state_all(payload["cuda_rng"])
+    del payload
     wrapped = (DistributedDataParallel(model, device_ids=[local_rank] if device.type == "cuda" else None,
-                                      find_unused_parameters=True)
-               if world > 1 else model)
+                                      find_unused_parameters=True) if world > 1 else model)
     sampler = loader = iterator = None
-    if args.data:
-        dataset = JointDataset(args.data, config)
-        sampler = (DistributedSampler(dataset, num_replicas=world, rank=rank, seed=args.seed)
-                   if world > 1 else None)
-        # Un générateur dédié isole l'itération du DataLoader du RNG du dropout.
+    epoch = 0
+    if dataset is not None:
+        sampler = DistributedSampler(dataset, num_replicas=world, rank=rank, seed=args.seed, shuffle=args.shuffle)
         loader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=collate_records,
-                            sampler=sampler, shuffle=False,
+                            sampler=sampler, num_workers=args.workers,
                             generator=torch.Generator().manual_seed(args.seed))
         epoch, skip = divmod(start * args.accumulation, len(loader))
-        if sampler is not None:
-            sampler.set_epoch(epoch)
+        sampler.set_epoch(epoch)
         iterator = iter(loader)
         for _ in range(skip):
             next(iterator)
-    else:
-        epoch = 0
     output_dir = Path(args.output)
+    val = None
     if rank == 0:
         output_dir.mkdir(parents=True, exist_ok=True)
         config.save(output_dir / "config.json")
+        val = (DataLoader(validation, batch_size=args.batch_size, collate_fn=collate_records,
+                          num_workers=args.workers, generator=torch.Generator().manual_seed(args.seed + 1))
+               if validation is not None else [synthetic_batch(config, batch_size=args.batch_size,
+                                                               seed=1000000 + args.seed)])
     autocast = (lambda: nullcontext()) if args.amp == "none" else (
         lambda: torch.autocast(device.type, dtype=torch.bfloat16 if args.amp == "bf16" else torch.float16)
     )
-    trainer = {key: getattr(args, key) for key in (
-        "steps", "batch_size", "accumulation", "seed", "lr", "warmup", "weight_decay", "amp", "data",
-        "modality_dropout"
-    )}
-    trainer["world_size"] = world
     model.train()
-    started = time.monotonic()
-    end_step = min(args.steps, args.stop_after) if args.stop_after is not None else args.steps
-    if end_step < start or end_step < 1:
-        raise ValueError("stop-after doit être >= à l'étape reprise et > 0")
+    started, last_step, last_evaluated = time.monotonic(), start, None
+    stopped_early = bool(args.patience and state["bad_evaluations"] >= args.patience)
+    if stopped_early:
+        end_step = start
+    report = None
     for step in range(start, end_step):
         optimizer.zero_grad(set_to_none=True)
         for group in optimizer.param_groups:
@@ -196,14 +217,13 @@ def train(args, config):
                     batch = next(iterator)
                 except StopIteration:
                     epoch += 1
-                    if sampler is not None:
-                        sampler.set_epoch(epoch)
+                    sampler.set_epoch(epoch)
                     iterator = iter(loader)
                     batch = next(iterator)
                 batch = {key: value.to(device) for key, value in batch.items()}
             if args.modality_dropout:
                 batch = drop_modalities(batch, args.modality_dropout)
-            sync = (wrapped.no_sync() if world > 1 and micro + 1 < args.accumulation else nullcontext())
+            sync = wrapped.no_sync() if world > 1 and micro + 1 < args.accumulation else nullcontext()
             with sync, autocast():
                 result = wrapped(**batch)
                 if result.loss is None:
@@ -216,30 +236,55 @@ def train(args, config):
             for key, value in result.losses.items():
                 metrics[key] = metrics.get(key, 0) + value.detach().item() / args.accumulation
             expert_usage = result.expert_usage
-        scaler.unscale_(optimizer)
-        norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip, error_if_nonfinite=True)
-        scaler.step(optimizer)
-        scaler.update()
+        norm, skipped = step_optimizer(model, optimizer, scaler, args.grad_clip)
+        last_step = step + 1
         if rank == 0:
-            row = dict(step=step + 1, **metrics, grad_norm=float(norm), lr=optimizer.param_groups[0]["lr"],
-                       elapsed_seconds=round(time.monotonic() - started, 3),
+            row = dict(step=last_step, **metrics, grad_norm=norm, optimizer_step_skipped=skipped,
+                       lr=optimizer.param_groups[0]["lr"], elapsed_seconds=round(time.monotonic() - started, 3),
                        expert_usage=expert_usage.cpu().tolist())
             with (output_dir / "metrics.jsonl").open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps(row) + "\n")
-            if step == start or (step + 1) % args.log_every == 0 or step + 1 == end_step:
+                stream.write(json.dumps(row, allow_nan=False) + "\n")
+            if step == start or last_step % args.log_every == 0 or last_step == end_step:
                 print(json.dumps({key: value for key, value in row.items() if key != "expert_usage"}), flush=True)
-            if (step + 1) % args.save_every == 0 or step + 1 == end_step:
-                save_checkpoint(output_dir / "latest.pt", model, optimizer=optimizer, scaler=scaler,
-                                step=step + 1, trainer=trainer)
+        # Ne pas ajouter une validation de contrôle à un simple --stop-after :
+        # sa reprise doit conserver le même calendrier d'arrêt anticipé.
+        validation_event = last_step % args.eval_every == 0 or last_step == args.steps
+        if validation_event:
+            if rank == 0:
+                report = evaluate(model, val, args.amp)
+                if "loss" not in report or not math.isfinite(report["loss"]):
+                    raise ValueError("Le jeu de validation doit fournir une perte supervisée finie")
+                last_evaluated = last_step
+                improved = report["loss"] < state["best_loss"]
+                significant = report["loss"] < state.get("reference_loss", state["best_loss"]) - args.min_delta
+                if improved:
+                    state.update(best_loss=report["loss"], best_step=last_step)
+                if significant:
+                    state.update(reference_loss=report["loss"], bad_evaluations=0)
+                else:
+                    state["bad_evaluations"] += 1
+                if improved:
+                    save_checkpoint(output_dir / "best.pt", model, optimizer=optimizer, scaler=scaler,
+                                    step=last_step, trainer=trainer)
+                stopped_early = bool(args.patience and state["bad_evaluations"] >= args.patience)
+                with (output_dir / "validation.jsonl").open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps(dict(step=last_step, improved=improved, **report), allow_nan=False) + "\n")
+                print(json.dumps({"validation_step": last_step, "loss": report["loss"],
+                                  "best_step": state["best_step"]}), flush=True)
+            if world > 1:
+                decision = torch.tensor(int(stopped_early), device=device)
+                dist.broadcast(decision, src=0)
+                stopped_early = bool(decision.item())
+        if rank == 0 and (last_step % args.save_every == 0 or last_step == end_step or stopped_early):
+            save_checkpoint(output_dir / "latest.pt", model, optimizer=optimizer, scaler=scaler,
+                            step=last_step, trainer=trainer)
+        if stopped_early:
+            break
     if rank == 0:
-        if args.val_data:
-            val = DataLoader(JointDataset(args.val_data, config), batch_size=args.batch_size,
-                             collate_fn=collate_records)
-        else:
-            # Seed disjoint : ceci reste un test synthétique, pas un benchmark réel.
-            val = [synthetic_batch(config, batch_size=args.batch_size, seed=1000000 + args.seed)]
-        report = evaluate(model, val, args.amp)
-        (output_dir / "evaluation.json").write_text(json.dumps(report, indent=2) + "\n")
+        if last_evaluated != last_step:
+            report = evaluate(model, val, args.amp)
+        report = dict(report, step=last_step, best_step=state["best_step"], stopped_early=stopped_early)
+        (output_dir / "evaluation.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
         print(json.dumps({"evaluation": report}), flush=True)
     if world > 1:
         dist.barrier()

@@ -241,3 +241,92 @@ class ChimeraTests(unittest.TestCase):
                 a, b = self.model(**self.batch), restored(**self.batch)
             torch.testing.assert_close(a.logits, b.logits, rtol=0, atol=0)
             self.assertFalse(path.with_name("model.pt.tmp").exists())
+
+    def test_resume_matches_uninterrupted_with_dropout(self):
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
+            config_path = Path(directory) / "config.json"
+            replace(self.config, dropout=0.1).save(config_path)
+            data_path = Path(directory) / "data.jsonl"
+            records = [dict(text=f"Signal {i}", series=[[i, 1, 2], [i + 1, 2, 3]], class_label=i)
+                       for i in range(5)]
+            data_path.write_text("\n".join(json.dumps(record) for record in records))
+            for mode in ("synthetic", "jsonl"):
+                with self.subTest(mode=mode):
+                    common = ["--threads", "2", "train", "--config", str(config_path), "--steps", "4",
+                              "--warmup", "1", "--batch-size", "2", "--accumulation", "2"]
+                    if mode == "jsonl":
+                        common.extend(("--data", str(data_path)))
+                    full, split = Path(directory) / (mode + "-full"), Path(directory) / (mode + "-split")
+                    main(common + ["--output", str(full)])
+                    main(common + ["--output", str(split), "--stop-after", "2"])
+                    main(common + ["--output", str(split), "--resume", str(split / "latest.pt")])
+                    a, _ = load_checkpoint(full / "latest.pt")
+                    b, _ = load_checkpoint(split / "latest.pt")
+                    for key, value in a.state_dict().items():
+                        torch.testing.assert_close(value, b.state_dict()[key], rtol=0, atol=0, msg=key)
+
+    def test_jsonl_loader_variable_lengths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "data.jsonl"
+            records = [dict(text="Bonjour", series=[[1, 2, 3], [2, 3, 4]], class_label=0),
+                       dict(text="Salut !", series=[[4, 5, 6]], class_label=1)]
+            path.write_text("\n".join(json.dumps(record) for record in records))
+            dataset = JointDataset(path, self.config)
+            batch = collate_records([dataset[0], dataset[1]])
+            self.assertFalse(batch["series_mask"][1, -1])
+            output = self.model(**batch)
+            output.loss.backward()
+            self.assertTrue(torch.isfinite(output.loss))
+
+    def test_jsonl_null_is_missing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "data.jsonl"
+            path.write_text(json.dumps(dict(series=[[1, None, 3]], class_label=1)))
+            item = JointDataset(path, self.config)[0]
+            self.assertTrue(torch.isnan(item["series"][0, 1]))
+            self.assertTrue(torch.isfinite(self.model(**collate_records([item])).loss))
+
+    @unittest.skipUnless(importlib.util.find_spec("PIL"), "Installer l'extra vision pour tester PNG/JPEG")
+    def test_png_loading_resizes_and_normalizes(self):
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as directory:
+            image_path = Path(directory) / "sample.png"
+            Image.new("RGB", (17, 11), color=(255, 0, 0)).save(image_path)
+            path = Path(directory) / "data.jsonl"
+            path.write_text(json.dumps(dict(image_path="sample.png", class_label=1)))
+            item = JointDataset(path, self.config)[0]
+            self.assertEqual(item["images"].shape, (3, 32, 32))
+            torch.testing.assert_close(item["images"][0], torch.ones(32, 32))
+            self.assertEqual(item["images"][1:].abs().sum().item(), 0)
+            self.assertTrue(torch.isfinite(self.model(**collate_records([item])).loss))
+
+    def test_inspection_counts_tied_weights_once(self):
+        report = inspect_config(self.config)
+        self.assertEqual(report["parameters"], sum(p.numel() for p in self.model.parameters()))
+        self.assertGreater(inspect_config(ChimeraConfig.preset("ultra"))["parameters"], 500_000_000_000)
+
+    def test_generation_restores_mode_and_uses_modalities(self):
+        self.model.train()
+        prompt = self.batch["input_ids"][:1, :4]
+        result = self.model.generate(prompt, images=self.batch["images"][:1],
+                                     series=self.batch["series"][:1], max_new_tokens=5,
+                                     temperature=0, eos_id=None)
+        self.assertEqual(result.shape, (1, 9))
+        self.assertTrue(self.model.training)
+        torch.testing.assert_close(result[:, :4], prompt)
+
+    def test_invalid_inputs_have_explicit_errors(self):
+        with self.assertRaises(ValueError):
+            self.model()
+        with self.assertRaises(ValueError):
+            self.model(self.batch["input_ids"], use_cache=True)
+        with self.assertRaises(ValueError):
+            self.model(self.batch["input_ids"], attention_mask=torch.zeros_like(self.batch["input_ids"]))
+        with self.assertRaises(ValueError):
+            self.model(images=torch.zeros(2, 3, 15, 15))
+        with self.assertRaises(ValueError):
+            self.model.generate(self.batch["input_ids"], temperature=-1)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

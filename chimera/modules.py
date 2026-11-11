@@ -35,8 +35,13 @@ class SwiGLU(nn.Module):
 class RotaryEmbedding(nn.Module):
     def __init__(self, head_dim, theta):
         super().__init__()
-        inv = 1.0 / (theta ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim))
-        self.register_buffer("inv_freq", inv, persistent=False)
+        self.head_dim, self.theta = head_dim, theta
+        self.register_buffer("inv_freq", self.frequencies(), persistent=False)
+
+    def frequencies(self, device=None):
+        return 1.0 / (self.theta ** (
+            torch.arange(0, self.head_dim, 2, dtype=torch.float32, device=device) / self.head_dim
+        ))
 
     def forward(self, x, offset=0):
         # [B, H, T, D] ; calcul des phases en fp32, même en précision mixte.
@@ -54,6 +59,9 @@ class LayerCache:
     value: torch.Tensor
     valid: torch.Tensor
     conv_state: torch.Tensor
+    start_pos: int = 0
+    context_key: torch.Tensor | None = None
+    context_value: torch.Tensor | None = None
 
 
 class GroupedQueryAttention(nn.Module):
@@ -70,7 +78,7 @@ class GroupedQueryAttention(nn.Module):
         self.k_norm = RMSNorm(self.head_dim, config.norm_eps)
         self.rope = RotaryEmbedding(self.head_dim, config.rope_theta)
 
-    def forward(self, x, valid, *, offset=0, cache=None):
+    def forward(self, x, valid, *, offset=0, cache=None, use_cache=False):
         b, t, _ = x.shape
         q = self.q(x).view(b, t, self.n_heads, self.head_dim).transpose(1, 2)
         k, v = self.kv(x).view(b, t, 2, self.n_kv_heads, self.head_dim).unbind(2)
@@ -82,21 +90,32 @@ class GroupedQueryAttention(nn.Module):
             key_valid = torch.cat((cache.valid, valid), -1)
         else:
             key_valid = valid
-        # Le cache conserve les positions absolues, y compris les positions masquées.
-        key_pos = torch.arange(k.size(-2), device=x.device)
-        query_pos = torch.arange(offset, offset + t, device=x.device)
-        allowed = torch.ones(t, k.size(-2), dtype=torch.bool, device=x.device)
-        if self.causal:
-            allowed = key_pos[None, :] <= query_pos[:, None]
-        if self.window:
-            allowed = allowed & (key_pos[None, :] > query_pos[:, None] - self.window)
-        mask = allowed[None, None, :, :] & key_valid[:, None, None, :]
+        start_pos = 0 if cache is None else cache.start_pos
+        # Les positions RoPE restent absolues après l'éviction des anciennes clés.
+        inside_window = not self.window or offset + t - 1 - start_pos < self.window
+        mask, is_causal = None, False
+        if bool(key_valid.all()) and inside_window and (not self.causal or t == 1 or offset == 0):
+            is_causal = self.causal and t > 1
+        else:
+            key_pos = torch.arange(start_pos, start_pos + k.size(-2), device=x.device)
+            query_pos = torch.arange(offset, offset + t, device=x.device)
+            allowed = torch.ones(t, k.size(-2), dtype=torch.bool, device=x.device)
+            if self.causal:
+                allowed = key_pos[None, :] <= query_pos[:, None]
+            if self.window:
+                allowed = allowed & (key_pos[None, :] > query_pos[:, None] - self.window)
+            mask = allowed[None, None, :, :] & key_valid[:, None, None, :]
         y = F.scaled_dot_product_attention(
-            q, k, v, attn_mask=mask,
+            q, k, v, attn_mask=mask, is_causal=is_causal,
             dropout_p=self.dropout if self.training else 0.0,
             enable_gqa=self.n_heads != self.n_kv_heads,
         )
         y = y.transpose(1, 2).contiguous().view(b, t, -1)
+        if use_cache and self.window and k.size(-2) > self.window - 1:
+            begin = k.size(-2) - (self.window - 1)
+            # clone libère réellement le stockage du préremplissage, même avec B=H=1.
+            k, v = k[:, :, begin:].clone(), v[:, :, begin:].clone()
+            key_valid = key_valid[:, begin:].clone()
         return self.out(y) * valid.unsqueeze(-1), (k, v, key_valid)
 
 
@@ -111,13 +130,18 @@ class CrossAttention(nn.Module):
         self.k_norm = RMSNorm(self.head_dim, config.norm_eps)
         self.dropout = config.dropout
 
-    def forward(self, queries, context, valid=None):
+    def project_context(self, context):
+        b = context.size(0)
+        k, v = self.kv(context).view(b, -1, 2, self.heads, self.head_dim).unbind(2)
+        return self.k_norm(k.transpose(1, 2)), v.transpose(1, 2)
+
+    def forward(self, queries, context=None, valid=None, *, projected=None):
         b, t, d = queries.shape
         q = self.q(queries).view(b, t, self.heads, self.head_dim).transpose(1, 2)
-        k, v = self.kv(context).view(b, -1, 2, self.heads, self.head_dim).unbind(2)
+        k, v = self.project_context(context) if projected is None else projected
         mask = None if valid is None else valid[:, None, None, :]
         y = F.scaled_dot_product_attention(
-            self.q_norm(q), self.k_norm(k.transpose(1, 2)), v.transpose(1, 2),
+            self.q_norm(q), k, v,
             attn_mask=mask, dropout_p=self.dropout if self.training else 0.0,
         )
         return self.out(y.transpose(1, 2).contiguous().view(b, t, d))
@@ -300,15 +324,21 @@ class DecoderBlock(nn.Module):
         self.moe = SparseMoE(config)
         self.dropout = nn.Dropout(config.dropout)
 
-    def forward(self, x, valid, context, *, offset=0, cache=None):
+    def forward(self, x, valid, context, *, offset=0, cache=None, use_cache=False):
         h = self.norm1(x)
-        attention, (k, v, key_valid) = self.attn(h, valid, offset=offset, cache=cache)
+        attention, (k, v, key_valid) = self.attn(h, valid, offset=offset, cache=cache, use_cache=use_cache)
         local, conv_state = self.conv(h, valid, None if cache is None else cache.conv_state)
         x = x + self.dropout(attention + torch.sigmoid(self.mix_gate) * local)
-        x = x + self.dropout(torch.sigmoid(self.cross_gate) * self.cross(self.norm2(x), context))
+        if cache is not None and cache.context_key is not None:
+            context_kv = cache.context_key, cache.context_value
+        else:
+            context_kv = self.cross.project_context(context)
+        x = x + self.dropout(torch.sigmoid(self.cross_gate) * self.cross(self.norm2(x), projected=context_kv))
         update, balance, z_loss, usage = self.moe(self.norm3(x), valid)
         x = (x + self.dropout(update)) * valid.unsqueeze(-1)
-        return x, balance, z_loss, usage, LayerCache(k, v, key_valid, conv_state)
+        next_cache = (LayerCache(k, v, key_valid, conv_state, offset + x.size(1) - k.size(-2), *context_kv)
+                      if use_cache else None)
+        return x, balance, z_loss, usage, next_cache
 
 
 class QuantileForecastHead(nn.Module):

@@ -131,7 +131,13 @@ class Chimera(nn.Module):
                 raise ValueError("Le contexte multimodal est déjà dans le cache ; ne pas le réinjecter")
             if len(cache.layers) != c.n_layers or cache.latents.size(0) != batch:
                 raise ValueError("Cache incompatible avec ce modèle ou ce batch")
-            if cache.offset < 1 or any(layer.key.size(-2) != cache.offset for layer in cache.layers):
+            if cache.offset < 1 or any(
+                layer.start_pos < 0 or layer.start_pos + layer.key.size(-2) != cache.offset
+                or layer.key.shape != layer.value.shape
+                or layer.key.size(0) != batch
+                or layer.valid.shape != (batch, layer.key.size(-2))
+                for layer in cache.layers
+            ):
                 raise ValueError("Positions incohérentes dans le cache")
         return batch
 
@@ -203,7 +209,7 @@ class Chimera(nn.Module):
             else:
                 x, balance, z_loss, expert_usage, layer_cache = block(
                     x, valid, latents, offset=offset,
-                    cache=None if cache is None else cache.layers[index],
+                    cache=None if cache is None else cache.layers[index], use_cache=use_cache,
                 )
                 if use_cache:
                     next_layers.append(layer_cache)

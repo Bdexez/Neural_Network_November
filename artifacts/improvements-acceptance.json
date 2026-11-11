@@ -1,0 +1,102 @@
+{
+  "model_parameters": 549485298,
+  "generated_text": "Signal de classe 3.",
+  "forecast_max_absolute_difference": 0.0,
+  "predicted_classes": [
+    3,
+    4
+  ],
+  "quality_metrics_match": true,
+  "interval_coverage": 0.9045138888888888,
+  "nominal_coverage": 0.8,
+  "improvements-ddp": {
+    "evaluation": {
+      "loss": 8.159271240234375,
+      "balance": 1.0198897123336792,
+      "router_z": 2.003765344619751,
+      "text": 5.294281959533691,
+      "multi_token": 5.55423641204834,
+      "classification": 2.059028148651123,
+      "forecast": 0.20369455218315125,
+      "alignment": 0.6928138732910156,
+      "text_tokens": 40,
+      "byte_perplexity": 199.19454485982868,
+      "classified_examples": 2,
+      "accuracy": 0.0,
+      "forecast_observations": 72,
+      "forecast_mae": 0.5904587689373229,
+      "forecast_rmse": 0.7243848722170346,
+      "forecast_mae_by_horizon": [
+        0.050686031579971313,
+        0.13336694240570068,
+        0.22076086203257242,
+        0.32934074103832245,
+        0.4439886311690013,
+        0.5546082357565562,
+        0.6474380989869436,
+        0.7498784164587656,
+        0.8563702454169592,
+        0.940417061249415,
+        1.0402438044548035,
+        1.1184061566988628
+      ],
+      "forecast_interval_coverage": 0.5416666666666666,
+      "forecast_interval_width": 1.0833554143706958,
+      "forecast_nominal_coverage": 0.8,
+      "step": 4,
+      "best_step": 4,
+      "stopped_early": false
+    },
+    "validation_steps": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "best_checkpoint_exists": true
+  },
+  "improvements-ddp-early": {
+    "evaluation": {
+      "loss": 8.119131803512573,
+      "balance": 1.018260419368744,
+      "router_z": 1.9961543679237366,
+      "text": 5.344098329544067,
+      "multi_token": 5.555415153503418,
+      "classification": 1.9872347116470337,
+      "forecast": 0.1851949617266655,
+      "alignment": 0.697664737701416,
+      "text_tokens": 80,
+      "byte_perplexity": 209.3690176062097,
+      "classified_examples": 4,
+      "accuracy": 0.0,
+      "forecast_observations": 144,
+      "forecast_mae": 0.5278895265526242,
+      "forecast_rmse": 0.6539805077704978,
+      "forecast_mae_by_horizon": [
+        0.07606890300909679,
+        0.1615047479669253,
+        0.24842173606157303,
+        0.3276032929619153,
+        0.4245397870739301,
+        0.5051811089118322,
+        0.5925566305716833,
+        0.6740320374568304,
+        0.753068096935749,
+        0.8118010660012563,
+        0.8604085544745127,
+        0.8994883572061857
+      ],
+      "forecast_interval_coverage": 0.4722222222222222,
+      "forecast_interval_width": 0.9578548338678148,
+      "forecast_nominal_coverage": 0.8,
+      "step": 2,
+      "best_step": 2,
+      "stopped_early": true
+    },
+    "validation_steps": [
+      1,
+      2
+    ],
+    "best_checkpoint_exists": true
+  }
+}

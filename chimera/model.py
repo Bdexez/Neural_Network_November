@@ -275,3 +275,58 @@ class Chimera(nn.Module):
                       if use_cache else None)
         return ChimeraOutput(logits, class_logits, forecast, total if supervised else None,
                              losses, torch.stack(usage), next_cache)
+
+    @torch.inference_mode()
+    def generate(self, input_ids, *, max_new_tokens=64, temperature=0.8, top_k=40,
+                 top_p=0.95, eos_id=2, **context):
+        if input_ids.ndim != 2 or input_ids.size(1) < 1:
+            raise ValueError("Le prompt doit avoir la forme [B, T] avec T > 0")
+        if type(max_new_tokens) is not int or max_new_tokens < 0:
+            raise ValueError("max_new_tokens doit être un entier positif ou nul")
+        if not math.isfinite(temperature) or temperature < 0 or not 0 < top_p <= 1:
+            raise ValueError("temperature doit être >= 0 et top_p dans ]0, 1]")
+        if type(top_k) is not int or top_k < 0:
+            raise ValueError("top_k doit être un entier positif ou nul")
+        if input_ids.size(1) + max_new_tokens > self.config.max_seq_len:
+            raise ValueError("Prompt + génération dépassent max_seq_len")
+        if eos_id is not None and not 0 <= eos_id < self.config.vocab_size:
+            raise ValueError("eos_id hors vocabulaire")
+        if "attention_mask" in context:
+            mask = context["attention_mask"]
+            if not mask[:, -1].bool().all():
+                raise ValueError("La génération en batch nécessite du padding à gauche")
+        was_training = self.training
+        self.eval()
+        try:
+            result = input_ids
+            finished = torch.zeros(input_ids.size(0), dtype=torch.bool, device=input_ids.device)
+            cache = None
+            for step in range(max_new_tokens):
+                output = self(input_ids if step == 0 else result[:, -1:],
+                              cache=cache, use_cache=True, **(context if step == 0 else {}))
+                cache = output.cache
+                scores = output.logits[:, -1].float()
+                # Les tokens de contrôle réservés ne sont pas des caractères générables.
+                scores[:, [0, 1, 3]] = -torch.inf
+                if temperature == 0:
+                    next_token = scores.argmax(-1)
+                else:
+                    scores = scores / temperature
+                    if top_k:
+                        threshold = scores.topk(min(top_k, scores.size(-1)), dim=-1).values[:, -1:]
+                        scores = scores.masked_fill(scores < threshold, -torch.inf)
+                    ordered, order = scores.sort(descending=True)
+                    cumulative = ordered.softmax(-1).cumsum(-1)
+                    remove = cumulative - ordered.softmax(-1) >= top_p
+                    ordered = ordered.masked_fill(remove, -torch.inf)
+                    scores = torch.full_like(scores, -torch.inf).scatter(-1, order, ordered)
+                    next_token = torch.multinomial(scores.softmax(-1), 1).squeeze(-1)
+                if eos_id is not None:
+                    next_token = torch.where(finished, eos_id, next_token)
+                    finished = finished | (next_token == eos_id)
+                result = torch.cat((result, next_token[:, None]), -1)
+                if eos_id is not None and finished.all():
+                    break
+            return result
+        finally:
+            self.train(was_training)

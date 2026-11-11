@@ -168,3 +168,76 @@ class ChimeraTests(unittest.TestCase):
             learned_mae = (predicted - validation["forecast_targets"]).abs().mean()
             persistence_mae = (validation["series"][:, -1:] - validation["forecast_targets"]).abs().mean()
         self.assertLess(learned_mae.item(), persistence_mae.item() * 0.6)
+
+    def test_quantiles_never_cross(self):
+        config = replace(self.config, quantiles=(0.01, 0.1, 0.5, 0.9, 0.99))
+        output = Chimera(config)(**self.batch)
+        self.assertTrue((output.forecast[..., 1:] >= output.forecast[..., :-1]).all())
+
+    def test_modalities_change_text_and_prediction(self):
+        self.model.eval()
+        inputs = self.inputs()
+        with torch.no_grad():
+            original = self.model(**inputs)
+            image_changed = self.model(**dict(inputs, images=torch.zeros_like(inputs["images"])))
+            series_changed = self.model(**dict(inputs, series=-inputs["series"]))
+        for other in (image_changed, series_changed):
+            self.assertGreater((original.logits - other.logits).abs().max().item(), 1e-7)
+            self.assertGreater((original.forecast - other.forecast).abs().max().item(), 1e-7)
+
+    def test_ignored_targets_are_finite(self):
+        batch = dict(self.batch, labels=torch.full_like(self.batch["labels"], -100),
+                     class_labels=torch.full_like(self.batch["class_labels"], -100),
+                     forecast_targets=torch.full_like(self.batch["forecast_targets"], float("nan")))
+        output = self.model(**batch)
+        for name in ("text", "multi_token", "classification", "forecast"):
+            self.assertEqual(output.losses[name].item(), 0)
+        output.loss.backward()
+        self.assertTrue(torch.isfinite(output.loss))
+
+    def test_checkpointed_gradients_equal_regular(self):
+        other = Chimera(replace(self.config, gradient_checkpointing=True))
+        other.load_state_dict(self.model.state_dict())
+        first = self.model(**self.batch)
+        second = other(**self.batch)
+        first.loss.backward()
+        second.loss.backward()
+        torch.testing.assert_close(first.loss, second.loss)
+        for (name, p), (_, q) in zip(self.model.named_parameters(), other.named_parameters()):
+            if p.grad is not None:
+                torch.testing.assert_close(p.grad, q.grad, rtol=1e-5, atol=1e-6, msg=name)
+
+    def test_cpu_bf16_backward(self):
+        with torch.autocast("cpu", dtype=torch.bfloat16):
+            output = self.model(**self.batch)
+        output.loss.backward()
+        self.assertTrue(torch.isfinite(output.loss))
+        self.assertTrue(all(torch.isfinite(p.grad).all() for p in self.model.parameters() if p.grad is not None))
+
+    def test_optimizer_learns_all_three_losses(self):
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=0.002)
+        initial = self.model(**self.batch)
+        baseline = {key: initial.losses[key].item() for key in ("text", "classification", "forecast")}
+        for _ in range(20):
+            optimizer.zero_grad(set_to_none=True)
+            output = self.model(**self.batch)
+            output.loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1)
+            optimizer.step()
+        final = self.model(**self.batch)
+        for name, value in baseline.items():
+            self.assertLess(final.losses[name].item(), value, name)
+
+    def test_atomic_checkpoint_roundtrip(self):
+        self.model.eval()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "nested" / "model.pt"
+            save_checkpoint(path, self.model, step=7)
+            restored, payload = load_checkpoint(path)
+            restored.eval()
+            self.assertEqual(payload["step"], 7)
+            self.assertIs(restored.embedding.weight, restored.lm_head.weight)
+            with torch.no_grad():
+                a, b = self.model(**self.batch), restored(**self.batch)
+            torch.testing.assert_close(a.logits, b.logits, rtol=0, atol=0)
+            self.assertFalse(path.with_name("model.pt.tmp").exists())

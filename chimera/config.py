@@ -29,6 +29,7 @@ class ChimeraConfig:
     series_features: int = 3
     max_series_len: int = 256
     temporal_layers: int = 2
+    temporal_statistics: bool = False
     n_latents: int = 16
     resampler_layers: int = 2
     num_classes: int = 6
@@ -94,6 +95,8 @@ class ChimeraConfig:
                 raise ValueError(f"{name} doit être fini et positif ou nul")
         if type(self.gradient_checkpointing) is not bool:
             raise ValueError("gradient_checkpointing doit être booléen")
+        if type(self.temporal_statistics) is not bool:
+            raise ValueError("temporal_statistics doit être booléen")
 
     def to_dict(self):
         return asdict(self)

@@ -69,6 +69,8 @@ class Chimera(nn.Module):
         self.alignment = nn.ModuleList([nn.Linear(d, d, bias=False) for _ in range(3)])
         self.apply(self._initialize)
         nn.init.zeros_(self.temporal.forecast_skip.weight)
+        if self.temporal.statistics_proj is not None:
+            nn.init.zeros_(self.temporal.statistics_proj.weight)
         for parameter in (self.modality, self.task_queries, self.resampler.latents,
                           self.resampler.null_context, self.vision.position):
             nn.init.normal_(parameter, std=0.02)

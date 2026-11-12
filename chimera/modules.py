@@ -251,6 +251,8 @@ class TemporalEncoder(nn.Module):
         self.norm = RMSNorm(config.d_model, config.norm_eps)
         self.forecast_context = config.forecast_context
         self.forecast_skip = nn.Linear(config.forecast_context, config.forecast_horizon, bias=False)
+        self.statistics_proj = (nn.Linear(6 * config.series_features + 1, config.d_model, bias=False)
+                                if config.temporal_statistics else None)
 
     def forward(self, series, valid):
         series = series.float()
@@ -262,19 +264,29 @@ class TemporalEncoder(nn.Module):
         centered = torch.where(observed, clean - mean, 0.0)
         scale = (centered.square().sum(1, keepdim=True) / count + 1e-5).sqrt()
         scale = torch.where(observed_count > 0, scale, torch.ones_like(scale))
+        positions = torch.arange(series.size(1), device=series.device)[None, :, None]
+        last_index = positions.expand_as(series).masked_fill(~observed, -1).max(1).values
+        anchor = clean.gather(1, last_index.clamp_min(0).unsqueeze(1)).squeeze(1)
+        anchor = torch.where(last_index >= 0, anchor, mean.squeeze(1))
         # Les valeurs manquantes sont représentées explicitement et ne polluent pas RevIN.
         features = torch.cat((centered / scale, observed.to(series.dtype)), dim=-1)
         x = self.proj(features.to(self.proj.weight.dtype))
+        if self.statistics_proj is not None:
+            length = valid.sum(1, keepdim=True).float().clamp_min(1)
+            # Les âges comptent les positions valides après la dernière observation,
+            # afin de rester invariants au padding ou aux positions exclues.
+            age = (valid.unsqueeze(-1) & (positions > last_index[:, None])).sum(1) / length
+            statistics = torch.cat((mean.squeeze(1).asinh(), scale.squeeze(1).log(),
+                                    anchor.asinh(), (anchor - mean.squeeze(1)) / scale.squeeze(1),
+                                    observed_count.squeeze(1) / length, age,
+                                    (length / self.forecast_context).log()), dim=-1)
+            x = x + self.statistics_proj(statistics.to(self.statistics_proj.weight.dtype))[:, None]
         x = x * valid.unsqueeze(-1)
         x = x + self.conv(x, valid)[0]
         for block in self.blocks:
             x = block(x, valid)
         # Connexion temporelle directe : partir de la persistance puis apprendre
         # une correction multihorizon sur l'historique centré à la dernière observation.
-        positions = torch.arange(series.size(1), device=series.device)[None, :, None]
-        last_index = positions.expand_as(series).masked_fill(~observed, -1).max(1).values
-        anchor = clean.gather(1, last_index.clamp_min(0).unsqueeze(1)).squeeze(1)
-        anchor = torch.where(last_index >= 0, anchor, mean.squeeze(1))
         centered_last = torch.where(observed, (clean - anchor[:, None]) / scale, 0.0)
         histories = []
         for row in range(series.size(0)):

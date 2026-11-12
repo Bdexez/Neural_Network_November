@@ -14,7 +14,7 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
 
 from .config import ChimeraConfig
-from .augmentation import SeriesAugmentation
+from .augmentation import SeriesAffineAugmentation, SeriesAugmentation
 from .data import JointDataset, collate_records, synthetic_batch
 from .model import Chimera
 from .modalities import MODALITIES, TARGETS, balanced_modalities, keep_modalities
@@ -181,12 +181,24 @@ def train(args, config):
             raise ValueError(f"Reprise : {option} diffère du checkpoint ({saved!r})")
         augmentation_options[name] = value
     augment_series = SeriesAugmentation(**augmentation_options)
+    affine_options = {}
+    previous_affine = previous.get("series_affine_augmentation", {})
+    for name, default in SeriesAffineAugmentation().to_dict().items():
+        saved = previous_affine.get(name, default)
+        option = f"series_affine_{name}"
+        value = getattr(args, option, None)
+        value = saved if value is None else value
+        if args.resume and value != saved:
+            raise ValueError(f"Reprise : {option} diffère du checkpoint ({saved!r})")
+        affine_options[name] = value
+    augment_affine = SeriesAffineAugmentation(**affine_options)
     args.shuffle = (previous.get("shuffle", False) if args.resume else True) if args.shuffle is None else args.shuffle
     keys = ("steps", "batch_size", "accumulation", "seed", "lr", "warmup", "weight_decay",
             "amp", "data", "modality_dropout", "modality_policy", "shuffle", "val_data", "eval_every", "patience", "min_delta")
     trainer = {key: getattr(args, key) for key in keys}
     trainer["initialization"] = previous.get("initialization", initialization)
     trainer["series_augmentation"] = augment_series.to_dict()
+    trainer["series_affine_augmentation"] = augment_affine.to_dict()
     trainer["world_size"] = world
     dataset = JointDataset(args.data, config) if args.data else None
     validation = JointDataset(args.val_data, config) if args.val_data else None
@@ -277,6 +289,10 @@ def train(args, config):
                 batch = balanced_modalities(batch, index, args.seed)
             elif args.modality_dropout:
                 batch = drop_modalities(batch, args.modality_dropout)
+            # Le futur ne doit changer d'unités que si l'historique permettant
+            # de connaître ces unités est encore présent dans les entrées.
+            original_series = batch.get("series")
+            batch = augment_affine(batch, index=index, seed=args.seed + 2000000)
             signature = "+".join(name for name in MODALITIES if name in batch)
             modality_batches[signature] = modality_batches.get(signature, 0) + 1
             if rank == 0 and "series" in batch:
@@ -285,7 +301,9 @@ def train(args, config):
                 valid_steps = valid.sum().item()
                 statistics = dict(examples=series.size(0), valid_steps=valid_steps,
                                   possible_values=valid_steps * series.size(-1),
-                                  observed_values=(torch.isfinite(series) & valid.unsqueeze(-1)).sum().item())
+                                  observed_values=(torch.isfinite(series) & valid.unsqueeze(-1)).sum().item(),
+                                  affine_changed_examples=(torch.isfinite(original_series) & valid.unsqueeze(-1)
+                                                           & (series != original_series)).any(dim=(1, 2)).sum().item())
                 for name, value in statistics.items():
                     series_statistics[name] = series_statistics.get(name, 0) + value
             sync = wrapped.no_sync() if world > 1 and micro + 1 < args.accumulation else nullcontext()

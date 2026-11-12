@@ -99,6 +99,14 @@ def main(argv=None):
                           help="Proportion de valeurs masquées dans les exemples sélectionnés (défaut : 0)")
     training.add_argument("--series-mask-probability", type=float,
                           help="Probabilité de sélectionner un exemple pour masquer ses valeurs (défaut : 0.5)")
+    training.add_argument("--series-affine-probability", type=float,
+                          help="Probabilité de transformer ensemble historique et futur (défaut : 0 ; restaurée à la reprise)")
+    training.add_argument("--series-affine-min-scale", type=float,
+                          help="Gain positif minimal (défaut : 0.1 ; tirage logarithmique)")
+    training.add_argument("--series-affine-max-scale", type=float,
+                          help="Gain maximal (défaut : 10)")
+    training.add_argument("--series-affine-max-shift", type=float,
+                          help="Amplitude maximale du décalage de niveau (défaut : 20)")
     training.add_argument("--device", default="cpu")
     training.add_argument("--amp", choices=("none", "bf16", "fp16"), default="none")
     training.add_argument("--data", help="Jeu d'entraînement JSONL ; sinon données synthétiques")

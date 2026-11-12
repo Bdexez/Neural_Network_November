@@ -20,6 +20,8 @@ Les [statistiques temporelles](TEMPORAL_STATISTICS.md) ajoutent une projection o
 
 La [correction des prévisions courtes](FORECAST_REFINEMENT.md) ajuste une couche de 396 paramètres à partir des derniers pas de l'historique, en conservant les poids du modèle de base.
 
+La [prévision après changement de niveau ou d'unités](AFFINE_ROBUSTNESS.md) compare une augmentation affine et des caractéristiques relatives, avec un témoin ajusté sur les mêmes données.
+
 ## Démarrage
 
 Python 3.11 ou plus récent. Dans cet espace de travail, `.venv` contient déjà PyTorch CPU.

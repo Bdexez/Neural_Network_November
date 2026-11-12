@@ -61,8 +61,13 @@ def main(argv=None):
         if signature is not None and current_signature != signature:
             raise ValueError("Les checkpoints doivent partager les mêmes entrées et cibles d'évaluation")
         signature = current_signature
+        trainer = dict(payload.get("trainer", {}))
+        validation = trainer.get("validation_state", {})
+        if validation.get("best_step") is None and validation.get("best_loss") == float("inf"):
+            trainer["validation_state"] = dict(validation, best_loss=None)
         entry = dict(checkpoint=path, sha256=file_sha256(path), step=payload["step"],
-                     config=model.config.to_dict(), fit=payload.get("trainer", {}).get("forecast_adapter_fit"), cases={})
+                     config=model.config.to_dict(), trainer=trainer,
+                     fit=trainer.get("forecast_adapter_fit"), cases={})
         del payload
         for case in dict.fromkeys(args.cases):
             entry["cases"][case] = {}

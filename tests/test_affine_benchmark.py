@@ -16,13 +16,15 @@ class AffineBenchmarkTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             root = Path(directory)
             checkpoint, output = root / "model.pt", root / "report.json"
-            save_checkpoint(checkpoint, Chimera(ChimeraConfig.preset("tiny")))
+            save_checkpoint(checkpoint, Chimera(ChimeraConfig.preset("tiny")),
+                            trainer={"validation_state": {"best_step": None, "best_loss": float("inf")}})
             args = ["--reference-checkpoint", str(checkpoint), "--checkpoint", str(checkpoint),
                     "--output", str(output), "--cases", "history8_missing30", "--transforms", "original", "offset20", "scale10",
                     "--modalities", "series", "--batches", "2", "--batch-size", "8", "--threads", "2"]
             main(args)
             report = json.loads(output.read_text())
             self.assertEqual(report["examples_per_case"], 16)
+            self.assertIsNone(report["checkpoints"]["source"]["trainer"]["validation_state"]["best_loss"])
             self.assertEqual(report["checkpoints"]["source"]["cases"], report["checkpoints"]["candidate"]["cases"])
             baseline = report["persistence_original_unit_mae"]["history8_missing30"]
             self.assertAlmostEqual(baseline["original"], baseline["offset20"], places=6)

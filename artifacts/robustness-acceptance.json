@@ -1,0 +1,228 @@
+{
+  "tests": {
+    "tests_run": 68,
+    "seconds": 15.262,
+    "wall_seconds": 16.969992785001523,
+    "exit_code": 0,
+    "success": true,
+    "command": ".venv/bin/python -m unittest discover -s tests -v"
+  },
+  "source_checkpoint_unchanged": true,
+  "source_checkpoint_sha256": "ea4f0fbb05e028fc0285f905e685299d8e261086f8c484ffe2abf25d49d9ed0b",
+  "controlled_training": {
+    "steps": 180,
+    "batch_size": 8,
+    "seed": 314,
+    "same_initialization": true,
+    "same_modality_schedule": true
+  },
+  "test_examples_per_case": 256,
+  "test_seed_start": 9000000,
+  "mask_seed_start": 9100000,
+  "results": {
+    "complete": {
+      "series": {
+        "source_mae": 0.23192071919735704,
+        "control_mae": 0.21104680249482044,
+        "augmented_mae": 0.2202505973346989,
+        "control_accuracy": 0.9765625,
+        "augmented_accuracy": 0.83984375
+      },
+      "all": {
+        "source_mae": 0.23050984756218895,
+        "control_mae": 0.20480195749284272,
+        "augmented_mae": 0.257280725186067,
+        "control_accuracy": 1.0,
+        "augmented_accuracy": 1.0
+      }
+    },
+    "history16": {
+      "series": {
+        "source_mae": 0.5362701263661115,
+        "control_mae": 0.5258283911745012,
+        "augmented_mae": 0.5049086345934484,
+        "control_accuracy": 0.4375,
+        "augmented_accuracy": 0.47265625
+      },
+      "all": {
+        "source_mae": 0.45518769310163204,
+        "control_mae": 0.4796669465314254,
+        "augmented_mae": 0.41163607612543274,
+        "control_accuracy": 1.0,
+        "augmented_accuracy": 1.0
+      }
+    },
+    "history8": {
+      "series": {
+        "source_mae": 0.6648136018969429,
+        "control_mae": 0.6611878863089563,
+        "augmented_mae": 0.6048132148830013,
+        "control_accuracy": 0.2109375,
+        "augmented_accuracy": 0.47265625
+      },
+      "all": {
+        "source_mae": 0.5708458078572423,
+        "control_mae": 0.5918190257378027,
+        "augmented_mae": 0.5637350603226676,
+        "control_accuracy": 1.0,
+        "augmented_accuracy": 1.0
+      }
+    },
+    "missing10": {
+      "series": {
+        "source_mae": 0.2759535785073442,
+        "control_mae": 0.26612836360537684,
+        "augmented_mae": 0.24270900139890728,
+        "control_accuracy": 0.796875,
+        "augmented_accuracy": 0.77734375
+      },
+      "all": {
+        "source_mae": 0.2541656544252773,
+        "control_mae": 0.2366973387258137,
+        "augmented_mae": 0.2699146723731853,
+        "control_accuracy": 1.0,
+        "augmented_accuracy": 1.0
+      }
+    },
+    "missing30": {
+      "series": {
+        "source_mae": 0.39328990705861444,
+        "control_mae": 0.39098845677229593,
+        "augmented_mae": 0.3250370939276763,
+        "control_accuracy": 0.48828125,
+        "augmented_accuracy": 0.5859375
+      },
+      "all": {
+        "source_mae": 0.35714739168906817,
+        "control_mae": 0.3595405963525182,
+        "augmented_mae": 0.3268262298389446,
+        "control_accuracy": 1.0,
+        "augmented_accuracy": 1.0
+      }
+    },
+    "history16_missing30": {
+      "series": {
+        "source_mae": 0.5576764806661837,
+        "control_mae": 0.5507966554614541,
+        "augmented_mae": 0.5348740636582079,
+        "control_accuracy": 0.390625,
+        "augmented_accuracy": 0.44140625
+      },
+      "all": {
+        "source_mae": 0.49590284962161807,
+        "control_mae": 0.5051357882461566,
+        "augmented_mae": 0.46545954725701855,
+        "control_accuracy": 1.0,
+        "augmented_accuracy": 1.0
+      }
+    },
+    "history8_missing30": {
+      "series": {
+        "source_mae": 0.6508273230897935,
+        "control_mae": 0.6479883559344065,
+        "augmented_mae": 0.6155799043885458,
+        "control_accuracy": 0.17578125,
+        "augmented_accuracy": 0.2890625
+      },
+      "all": {
+        "source_mae": 0.5741055673683554,
+        "control_mae": 0.5899829835446629,
+        "augmented_mae": 0.568772713745097,
+        "control_accuracy": 1.0,
+        "augmented_accuracy": 1.0
+      }
+    }
+  },
+  "persistence_forecast_mae": {
+    "complete": 0.5211066128548636,
+    "history16": 0.5211066128548636,
+    "history8": 0.5211066128548636,
+    "missing10": 0.5309095996320442,
+    "missing30": 0.5578245824864199,
+    "history16_missing30": 0.5578245824864199,
+    "history8_missing30": 0.5578245824864199
+  },
+  "distributed_smoke_test": {
+    "world_size": 2,
+    "accumulation": 2,
+    "evaluation": {
+      "loss": 7.829173564910889,
+      "balance": 1.0087478160858154,
+      "router_z": 2.004791021347046,
+      "text": 5.010618209838867,
+      "multi_token": 5.545440673828125,
+      "classification": 2.019789695739746,
+      "forecast": 0.19589349627494812,
+      "alignment": 0.7247288823127747,
+      "text_tokens": 40,
+      "byte_perplexity": 149.99743738328198,
+      "classified_examples": 2,
+      "accuracy": 0.0,
+      "forecast_observations": 72,
+      "forecast_mae": 0.5676155359380775,
+      "forecast_rmse": 0.6980507651558734,
+      "forecast_mae_by_horizon": [
+        0.11083223919073741,
+        0.12666570643583933,
+        0.20700469613075256,
+        0.2817846139272054,
+        0.3844815293947856,
+        0.4888213773568471,
+        0.6028686861197153,
+        0.7153110007445017,
+        0.8315138171116511,
+        0.9250278174877167,
+        1.025084098180135,
+        1.1119908491770427
+      ],
+      "forecast_interval_coverage": 0.5138888888888888,
+      "forecast_interval_width": 1.0903351762228541,
+      "forecast_nominal_coverage": 0.8,
+      "forecast_interval_score": 3.0387266692188053,
+      "forecast_interval_coverage_by_horizon": [
+        1.0,
+        1.0,
+        1.0,
+        0.8333333333333334,
+        0.5,
+        0.5,
+        0.5,
+        0.3333333333333333,
+        0.3333333333333333,
+        0.16666666666666666,
+        0.0,
+        0.0
+      ],
+      "forecast_interval_width_by_horizon": [
+        1.0896751781304677,
+        1.0875900189081829,
+        1.0864583949247997,
+        1.094410628080368,
+        1.0947920382022858,
+        1.0947082042694092,
+        1.0820295612017314,
+        1.0823314090569813,
+        1.0927228927612305,
+        1.094238519668579,
+        1.0931090613206227,
+        1.0919562081495922
+      ],
+      "step": 7,
+      "best_step": 7,
+      "stopped_early": false
+    }
+  },
+  "scope": "One paired training seed and synthetic held-out examples; mixed outcomes, no universal robustness claim.",
+  "recommended_clean_checkpoint_demo": {
+    "checkpoint": "runs/workstation-robust-control/model.pt",
+    "generated_text": "Signal de classe 3.",
+    "predicted_classes": [
+      3,
+      4
+    ],
+    "target_classes": [
+      3,
+      4
+    ]
+  }
+}

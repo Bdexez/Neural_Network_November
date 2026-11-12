@@ -12,9 +12,32 @@ from chimera.calibration import file_sha256
 from chimera.cli import main
 from chimera.training import load_checkpoint, save_checkpoint
 from tools.make_forecast_data import main as make_data
+from tools.benchmark_calibration import main as benchmark_calibration
 
 
 class ForecastAdapterCliTests(unittest.TestCase):
+    def test_calibration_benchmark_uses_disjoint_short_masked_histories(self):
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            root = Path(directory)
+            checkpoint, output = root / "model.pt", root / "study"
+            save_checkpoint(checkpoint, Chimera(ChimeraConfig.preset("tiny")))
+            args = ["--checkpoint", str(checkpoint), "--output-dir", str(output),
+                    "--case", "history8_missing30", "--modalities", "series", "text+image+series",
+                    "--calibration-batches", "2", "--test-batches", "2", "--batch-size", "8", "--threads", "2"]
+            benchmark_calibration(args)
+            report = json.loads((output / "benchmark.json").read_text())
+            self.assertEqual(set(report["reports"]), {"series", "text+image+series"})
+            self.assertEqual(report["test_examples"], 16)
+            self.assertEqual(report["settings"]["case"], "history8_missing30")
+            for entry in report["reports"].values():
+                metrics = entry["metrics"]
+                self.assertEqual(metrics["forecast_observations"], 16 * 12 * 3)
+                self.assertEqual(entry["calibration"]["checkpoint_sha256"], file_sha256(checkpoint))
+                self.assertTrue(0 <= metrics["calibrated_interval_coverage"] <= 1)
+            for options in (("--test-seed", "5000001"), ("--test-mask-seed", "5100001")):
+                with self.assertRaises(SystemExit):
+                    benchmark_calibration([*args, *options])
+
     def test_data_fit_roundtrip_provenance_and_input_protection(self):
         with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             root = Path(directory)

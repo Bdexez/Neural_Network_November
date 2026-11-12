@@ -36,10 +36,11 @@ jobs:
           torchrun --standalone --nproc-per-node=2 -m chimera --threads 1 train \
             --preset tiny --steps 3 --batch-size 2 --accumulation 2 \
             --eval-every 1 --output runs/ci-ddp
-      - name: Distributed statistics transfer with augmented modalities
+      - name: Distributed statistics transfer with affine histories
         run: |
           torchrun --standalone --nproc-per-node=2 -m chimera --threads 1 train \
             --init-from runs/ci-ddp/latest.pt --steps 7 --batch-size 2 --accumulation 2 \
             --model-overrides configs/temporal-statistics-overrides.json \
             --modality-policy balanced --series-crop-probability 0.5 --series-missing-rate 0.2 \
+            --series-affine-probability 0.5 \
             --eval-every 7 --output runs/ci-balanced

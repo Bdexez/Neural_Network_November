@@ -16,6 +16,29 @@ from chimera.training import load_checkpoint
 
 
 class AffineTrainingTests(unittest.TestCase):
+    def test_legacy_checkpoint_restores_disabled_affine_augmentation_without_changing_weights(self):
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
+            root = Path(directory)
+            config = root / "config.json"
+            replace(ChimeraConfig.preset("tiny"), dropout=0.1).save(config)
+            common = ["--threads", "2", "train", "--config", str(config), "--steps", "3", "--batch-size", "2",
+                      "--eval-every", "3", "--modality-policy", "balanced"]
+            initial, legacy = root / "initial", root / "legacy.pt"
+            main([*common, "--output", str(initial), "--stop-after", "1"])
+            payload = torch.load(initial / "latest.pt", weights_only=True)
+            payload["trainer"].pop("series_affine_augmentation")
+            torch.save(payload, legacy)
+            main([*common, "--resume", str(initial / "latest.pt"), "--output", str(root / "new")])
+            main([*common, "--resume", str(legacy), "--output", str(root / "old")])
+            a, _ = load_checkpoint(root / "new/latest.pt")
+            b, pb = load_checkpoint(root / "old/latest.pt")
+            self.assertEqual(pb["trainer"]["series_affine_augmentation"]["probability"], 0)
+            for name, value in a.state_dict().items():
+                torch.testing.assert_close(value, b.state_dict()[name], rtol=0, atol=0, msg=name)
+            with self.assertRaisesRegex(ValueError, "series_affine_probability"):
+                main([*common, "--resume", str(legacy), "--output", str(root / "invalid"),
+                      "--series-affine-probability", "0.5"])
+
     def test_balanced_dropout_training_resumes_exactly_with_affine_settings(self):
         with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
             root = Path(directory)

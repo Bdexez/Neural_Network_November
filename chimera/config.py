@@ -40,6 +40,8 @@ class ChimeraConfig:
     router_z_weight: float = 0.001
     mtp_weight: float = 0.1
     alignment_weight: float = 0.05
+    alignment_mode: str = "paired"
+    alignment_temperature: float = 0.1
     text_weight: float = 1.0
     classification_weight: float = 1.0
     forecast_weight: float = 1.0
@@ -74,6 +76,10 @@ class ChimeraConfig:
             raise ValueError("rope_theta doit être fini et > 1")
         if not math.isfinite(self.norm_eps) or self.norm_eps <= 0:
             raise ValueError("norm_eps doit être fini et > 0")
+        if self.alignment_mode not in ("paired", "class"):
+            raise ValueError("alignment_mode doit être paired ou class")
+        if not math.isfinite(self.alignment_temperature) or self.alignment_temperature <= 0:
+            raise ValueError("alignment_temperature doit être finie et > 0")
         self.quantiles = tuple(self.quantiles)
         if not self.quantiles or any(not 0 < q < 1 for q in self.quantiles):
             raise ValueError("Les quantiles doivent appartenir à ]0, 1[")

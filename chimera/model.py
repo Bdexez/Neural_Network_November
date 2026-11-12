@@ -7,6 +7,7 @@ from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
 
 from .config import ChimeraConfig
+from .losses import symmetric_contrastive_loss
 from .modules import (
     DecoderBlock, LayerCache, LatentResampler, QuantileForecastHead,
     RMSNorm, TemporalEncoder, VisionEncoder,
@@ -269,12 +270,13 @@ class Chimera(nn.Module):
         if len(align_vectors) > 1 and batch > 1:
             vectors = [F.normalize(self.alignment[i](v).float(), dim=-1) for i, v in align_vectors]
             contrastive = []
-            identity = torch.arange(batch, device=x.device)
             for i in range(len(vectors)):
                 for j in range(i + 1, len(vectors)):
-                    similarity = vectors[i] @ vectors[j].T / 0.1
-                    contrastive.append((F.cross_entropy(similarity, identity)
-                                        + F.cross_entropy(similarity.T, identity)) / 2)
+                    with torch.autocast(device_type=x.device.type, enabled=False):
+                        similarity = vectors[i] @ vectors[j].T / c.alignment_temperature
+                    contrastive.append(symmetric_contrastive_loss(
+                        similarity, class_labels if c.alignment_mode == "class" else None,
+                    ))
             losses["alignment"] = torch.stack(contrastive).mean()
             total = total + c.alignment_weight * losses["alignment"]
         next_cache = (ModelCache(next_layers, latents, offset + hidden.size(1), mean, scale, baseline)

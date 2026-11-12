@@ -89,6 +89,14 @@ def main(argv=None):
                           help="Probabilité d'omettre chaque modalité pendant l'entraînement")
     training.add_argument("--modality-policy", choices=("dropout", "balanced"),
                           help="dropout (défaut) ou cycle équilibré des combinaisons supervisées ; restauré à la reprise")
+    training.add_argument("--series-crop-probability", type=float,
+                          help="Probabilité de raccourcir chaque historique (défaut : 0 ; restaurée à la reprise)")
+    training.add_argument("--series-min-history", type=int,
+                          help="Longueur minimale après troncature (défaut : 8, bornée par la longueur disponible)")
+    training.add_argument("--series-missing-rate", type=float,
+                          help="Proportion de valeurs masquées dans les exemples sélectionnés (défaut : 0)")
+    training.add_argument("--series-mask-probability", type=float,
+                          help="Probabilité de sélectionner un exemple pour masquer ses valeurs (défaut : 0.5)")
     training.add_argument("--device", default="cpu")
     training.add_argument("--amp", choices=("none", "bf16", "fp16"), default="none")
     training.add_argument("--data", help="Jeu d'entraînement JSONL ; sinon données synthétiques")

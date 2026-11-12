@@ -52,7 +52,7 @@ class TrainingPolicyTests(unittest.TestCase):
             original, _ = load_checkpoint(source)
             torch.testing.assert_close(original.embedding.weight, initial, rtol=0, atol=0)
 
-    def test_balanced_training_resumes_exactly_and_records_all_subsets(self):
+    def test_balanced_augmented_training_resumes_exactly_and_records_all_subsets(self):
         with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
             root = Path(directory)
             config = root / "config.json"
@@ -60,13 +60,15 @@ class TrainingPolicyTests(unittest.TestCase):
             common = ["--threads", "2", "train", "--config", str(config), "--steps", "7",
                       "--batch-size", "2", "--accumulation", "2", "--eval-every", "7"]
             full, split = root / "full", root / "split"
-            main(common + ["--output", str(full), "--modality-policy", "balanced"])
-            main(common + ["--output", str(split), "--modality-policy", "balanced", "--stop-after", "3"])
+            augmentation = ["--series-crop-probability", "0.7", "--series-missing-rate", "0.3"]
+            main(common + ["--output", str(full), "--modality-policy", "balanced", *augmentation])
+            main(common + ["--output", str(split), "--modality-policy", "balanced", *augmentation, "--stop-after", "3"])
             # Sans répéter l'option : la politique est restaurée du checkpoint.
             main(common + ["--output", str(split), "--resume", str(split / "latest.pt")])
             a, pa = load_checkpoint(full / "latest.pt")
             b, pb = load_checkpoint(split / "latest.pt")
             self.assertEqual(pb["trainer"]["modality_policy"], "balanced")
+            self.assertEqual(pb["trainer"]["series_augmentation"]["missing_rate"], 0.3)
             for name, tensor in a.state_dict().items():
                 torch.testing.assert_close(tensor, b.state_dict()[name], rtol=0, atol=0, msg=name)
             rows = [json.loads(line) for line in (full / "metrics.jsonl").read_text().splitlines()]
@@ -76,9 +78,14 @@ class TrainingPolicyTests(unittest.TestCase):
                     counts[name] = counts.get(name, 0) + count
             self.assertEqual(len(counts), 7)
             self.assertEqual(set(counts.values()), {2})
+            series = [row["series_statistics"] for row in rows if row["series_statistics"]]
+            self.assertLess(sum(row["observed_values"] for row in series), sum(row["possible_values"] for row in series))
             with self.assertRaisesRegex(ValueError, "modality_policy"):
                 main(common + ["--output", str(split), "--resume", str(split / "latest.pt"),
                                "--modality-policy", "dropout"])
+            with self.assertRaisesRegex(ValueError, "series_missing_rate"):
+                main(common + ["--output", str(split), "--resume", str(split / "latest.pt"),
+                               "--series-missing-rate", "0"])
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
 
 from .config import ChimeraConfig
+from .augmentation import SeriesAugmentation
 from .data import JointDataset, collate_records, synthetic_batch
 from .model import Chimera
 from .modalities import MODALITIES, TARGETS, balanced_modalities, keep_modalities
@@ -140,11 +141,23 @@ def train(args, config):
     args.modality_policy = args.modality_policy or previous_policy
     if args.resume and args.modality_policy != previous_policy:
         raise ValueError(f"Reprise : modality_policy diffère du checkpoint ({previous_policy!r})")
+    augmentation_options = {}
+    previous_augmentation = previous.get("series_augmentation", {})
+    for name, default in SeriesAugmentation().to_dict().items():
+        saved = previous_augmentation.get(name, default)
+        option = f"series_{name}"
+        value = getattr(args, option)
+        value = saved if value is None else value
+        if args.resume and value != saved:
+            raise ValueError(f"Reprise : {option} diffère du checkpoint ({saved!r})")
+        augmentation_options[name] = value
+    augment_series = SeriesAugmentation(**augmentation_options)
     args.shuffle = (previous.get("shuffle", False) if args.resume else True) if args.shuffle is None else args.shuffle
     keys = ("steps", "batch_size", "accumulation", "seed", "lr", "warmup", "weight_decay",
             "amp", "data", "modality_dropout", "modality_policy", "shuffle", "val_data", "eval_every", "patience", "min_delta")
     trainer = {key: getattr(args, key) for key in keys}
     trainer["initialization"] = previous.get("initialization", initialization)
+    trainer["series_augmentation"] = augment_series.to_dict()
     trainer["world_size"] = world
     dataset = JointDataset(args.data, config) if args.data else None
     validation = JointDataset(args.val_data, config) if args.val_data else None
@@ -212,7 +225,7 @@ def train(args, config):
         optimizer.zero_grad(set_to_none=True)
         for group in optimizer.param_groups:
             group["lr"] = learning_rate(step, args.steps, args.lr, args.warmup) * group["lr_scale"]
-        metrics, expert_usage, modality_batches = {}, None, {}
+        metrics, expert_usage, modality_batches, series_statistics = {}, None, {}, {}
         for micro in range(args.accumulation):
             if iterator is None:
                 batch = synthetic_batch(config, batch_size=args.batch_size,
@@ -227,13 +240,23 @@ def train(args, config):
                     iterator = iter(loader)
                     batch = next(iterator)
                 batch = {key: value.to(device) for key, value in batch.items()}
+            index = (step * args.accumulation + micro) * world + rank
+            batch = augment_series(batch, index=index, seed=args.seed)
             if args.modality_policy == "balanced":
-                index = (step * args.accumulation + micro) * world + rank
                 batch = balanced_modalities(batch, index, args.seed)
             elif args.modality_dropout:
                 batch = drop_modalities(batch, args.modality_dropout)
             signature = "+".join(name for name in MODALITIES if name in batch)
             modality_batches[signature] = modality_batches.get(signature, 0) + 1
+            if rank == 0 and "series" in batch:
+                series = batch["series"]
+                valid = batch.get("series_mask", torch.ones(series.shape[:2], device=series.device, dtype=torch.bool)).bool()
+                valid_steps = valid.sum().item()
+                statistics = dict(examples=series.size(0), valid_steps=valid_steps,
+                                  possible_values=valid_steps * series.size(-1),
+                                  observed_values=(torch.isfinite(series) & valid.unsqueeze(-1)).sum().item())
+                for name, value in statistics.items():
+                    series_statistics[name] = series_statistics.get(name, 0) + value
             sync = wrapped.no_sync() if world > 1 and micro + 1 < args.accumulation else nullcontext()
             with sync, autocast():
                 result = wrapped(**batch)
@@ -252,7 +275,8 @@ def train(args, config):
         if rank == 0:
             row = dict(step=last_step, **metrics, grad_norm=norm, optimizer_step_skipped=skipped,
                        lr=optimizer.param_groups[0]["lr"], elapsed_seconds=round(time.monotonic() - started, 3),
-                       expert_usage=expert_usage.cpu().tolist(), modality_batches=modality_batches)
+                       expert_usage=expert_usage.cpu().tolist(), modality_batches=modality_batches,
+                       series_statistics=series_statistics)
             with (output_dir / "metrics.jsonl").open("a", encoding="utf-8") as stream:
                 stream.write(json.dumps(row, allow_nan=False) + "\n")
             if step == start or last_step % args.log_every == 0 or last_step == end_step:

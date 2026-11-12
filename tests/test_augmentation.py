@@ -14,11 +14,12 @@ class AugmentationTests(unittest.TestCase):
         valid[2, 5:] = False
         valid[3, [1, 5, 8]] = False
         valid[4, 2:] = False
+        original_valid = valid.clone()
         batch = dict(series=series, series_mask=valid, forecast_targets=torch.randn(5, 4, 2))
         result = SeriesAugmentation(crop_probability=1, min_history=4)(batch, index=3, seed=9)
         self.assertIs(result["forecast_targets"], batch["forecast_targets"])
         torch.testing.assert_close(series, torch.arange(120).float().reshape(5, 12, 2))
-        torch.testing.assert_close(batch["series_mask"], valid)
+        torch.testing.assert_close(batch["series_mask"], original_valid)
         self.assertTrue(torch.isnan(result["series"][~result["series_mask"]]).all())
         for row in range(5):
             original_indices = valid[row].nonzero().flatten()

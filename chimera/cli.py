@@ -86,6 +86,8 @@ def main(argv=None):
     training.add_argument("--seed", type=int, default=42)
     training.add_argument("--modality-dropout", type=float, default=0.15,
                           help="Probabilité d'omettre chaque modalité pendant l'entraînement")
+    training.add_argument("--modality-policy", choices=("dropout", "balanced"),
+                          help="dropout (défaut) ou cycle équilibré des combinaisons supervisées ; restauré à la reprise")
     training.add_argument("--device", default="cpu")
     training.add_argument("--amp", choices=("none", "bf16", "fp16"), default="none")
     training.add_argument("--data", help="Jeu d'entraînement JSONL ; sinon données synthétiques")

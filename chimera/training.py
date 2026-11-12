@@ -16,6 +16,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 from .config import ChimeraConfig
 from .data import JointDataset, collate_records, synthetic_batch
 from .model import Chimera
+from .modalities import MODALITIES, TARGETS, balanced_modalities, keep_modalities
 from .evaluation import evaluate
 from .modules import RotaryEmbedding
 
@@ -72,20 +73,13 @@ def learning_rate(step, total_steps, peak, warmup):
 
 def drop_modalities(batch, probability):
     """Apprendre aussi avec des modalités absentes, sans supprimer toutes les entrées."""
-    names = [name for name in ("input_ids", "images", "series") if name in batch]
+    names = [name for name in MODALITIES if name in batch]
     kept = [name for name in names if random.random() >= probability]
     if not kept:
         kept = [random.choice(names)]
-    result = batch.copy()
-    for name in set(names) - set(kept):
-        del result[name]
-        if name == "input_ids":
-            result.pop("attention_mask", None)
-            result.pop("labels", None)
-        elif name == "series":
-            result.pop("series_mask", None)
+    result = keep_modalities(batch, kept)
     # Un corpus ne contenant que du texte doit conserver ses cibles.
-    if not any(name in result for name in ("labels", "class_labels", "forecast_targets")):
+    if not any(name in result for name in TARGETS):
         return batch
     return result
 
@@ -135,9 +129,13 @@ def train(args, config):
         previous = payload.get("trainer", {})
     else:
         model, payload, previous, start = Chimera(config).to(device), {}, {}, 0
+    previous_policy = previous.get("modality_policy", "dropout")
+    args.modality_policy = args.modality_policy or previous_policy
+    if args.resume and args.modality_policy != previous_policy:
+        raise ValueError(f"Reprise : modality_policy diffère du checkpoint ({previous_policy!r})")
     args.shuffle = (previous.get("shuffle", False) if args.resume else True) if args.shuffle is None else args.shuffle
     keys = ("steps", "batch_size", "accumulation", "seed", "lr", "warmup", "weight_decay",
-            "amp", "data", "modality_dropout", "shuffle", "val_data", "eval_every", "patience", "min_delta")
+            "amp", "data", "modality_dropout", "modality_policy", "shuffle", "val_data", "eval_every", "patience", "min_delta")
     trainer = {key: getattr(args, key) for key in keys}
     trainer["world_size"] = world
     dataset = JointDataset(args.data, config) if args.data else None
@@ -206,7 +204,7 @@ def train(args, config):
         optimizer.zero_grad(set_to_none=True)
         for group in optimizer.param_groups:
             group["lr"] = learning_rate(step, args.steps, args.lr, args.warmup) * group["lr_scale"]
-        metrics, expert_usage = {}, None
+        metrics, expert_usage, modality_batches = {}, None, {}
         for micro in range(args.accumulation):
             if iterator is None:
                 batch = synthetic_batch(config, batch_size=args.batch_size,
@@ -221,8 +219,13 @@ def train(args, config):
                     iterator = iter(loader)
                     batch = next(iterator)
                 batch = {key: value.to(device) for key, value in batch.items()}
-            if args.modality_dropout:
+            if args.modality_policy == "balanced":
+                index = (step * args.accumulation + micro) * world + rank
+                batch = balanced_modalities(batch, index, args.seed)
+            elif args.modality_dropout:
                 batch = drop_modalities(batch, args.modality_dropout)
+            signature = "+".join(name for name in MODALITIES if name in batch)
+            modality_batches[signature] = modality_batches.get(signature, 0) + 1
             sync = wrapped.no_sync() if world > 1 and micro + 1 < args.accumulation else nullcontext()
             with sync, autocast():
                 result = wrapped(**batch)
@@ -241,7 +244,7 @@ def train(args, config):
         if rank == 0:
             row = dict(step=last_step, **metrics, grad_norm=norm, optimizer_step_skipped=skipped,
                        lr=optimizer.param_groups[0]["lr"], elapsed_seconds=round(time.monotonic() - started, 3),
-                       expert_usage=expert_usage.cpu().tolist())
+                       expert_usage=expert_usage.cpu().tolist(), modality_batches=modality_batches)
             with (output_dir / "metrics.jsonl").open("a", encoding="utf-8") as stream:
                 stream.write(json.dumps(row, allow_nan=False) + "\n")
             if step == start or last_step % args.log_every == 0 or last_step == end_step:

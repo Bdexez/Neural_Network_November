@@ -14,6 +14,8 @@ Le [suivi de l'apprentissage](LEARNING.md) présente le fine-tuning du modèle e
 
 La [calibration des prévisions](CALIBRATION.md) ajuste les intervalles sur un jeu séparé et mesure leur couverture sur un test indépendant, avec des résultats pour les sept combinaisons de modalités.
 
+Les [historiques courts et observations manquantes](ROBUSTNESS.md) couvrent l'augmentation temporelle, sa reprise reproductible et les comparaisons avec un entraînement témoin.
+
 ## Démarrage
 
 Python 3.11 ou plus récent. Dans cet espace de travail, `.venv` contient déjà PyTorch CPU.
@@ -29,6 +31,9 @@ python3 -m venv .venv
 
 # Utiliser les poids entraînés localement
 .venv/bin/python -m chimera demo --checkpoint runs/workstation/model.pt
+
+# Poids affinés pour les historiques complets, conservés localement
+.venv/bin/python -m chimera demo --checkpoint runs/workstation-robust-control/model.pt
 
 # Vérifier l'architecture sans allouer ses poids
 .venv/bin/python -m chimera inspect --all

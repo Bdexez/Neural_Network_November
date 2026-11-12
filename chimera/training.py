@@ -121,12 +121,19 @@ def train(args, config):
             device = torch.device("cuda", local_rank)
         dist.init_process_group("nccl" if device.type == "cuda" else "gloo")
     seed_everything(args.seed)
-    if args.resume:
-        model, payload = load_checkpoint(args.resume, device)
-        if "optimizer" not in payload:
-            raise ValueError("Une reprise nécessite le checkpoint complet latest.pt avec son optimiseur")
-        config, start = model.config, payload["step"]
-        previous = payload.get("trainer", {})
+    initialization = None
+    if args.resume or args.init_from:
+        model, source = load_checkpoint(args.resume or args.init_from, device)
+        config = model.config
+        if args.resume:
+            if "optimizer" not in source:
+                raise ValueError("Une reprise nécessite le checkpoint complet latest.pt avec son optimiseur")
+            payload, previous, start = source, source.get("trainer", {}), source["step"]
+        else:
+            initialization = dict(checkpoint=str(Path(args.init_from).resolve()), step=source["step"],
+                                  seed=source.get("trainer", {}).get("seed"))
+            payload, previous, start = {}, {}, 0
+        del source
     else:
         model, payload, previous, start = Chimera(config).to(device), {}, {}, 0
     previous_policy = previous.get("modality_policy", "dropout")
@@ -137,6 +144,7 @@ def train(args, config):
     keys = ("steps", "batch_size", "accumulation", "seed", "lr", "warmup", "weight_decay",
             "amp", "data", "modality_dropout", "modality_policy", "shuffle", "val_data", "eval_every", "patience", "min_delta")
     trainer = {key: getattr(args, key) for key in keys}
+    trainer["initialization"] = previous.get("initialization", initialization)
     trainer["world_size"] = world
     dataset = JointDataset(args.data, config) if args.data else None
     validation = JointDataset(args.val_data, config) if args.val_data else None

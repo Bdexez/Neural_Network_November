@@ -8,12 +8,50 @@ import unittest
 
 import torch
 
-from chimera import ChimeraConfig
+from chimera import Chimera, ChimeraConfig
 from chimera.cli import main
-from chimera.training import load_checkpoint
+from chimera.training import load_checkpoint, save_checkpoint
 
 
 class TrainingPolicyTests(unittest.TestCase):
+    def test_finetuning_uses_source_weights_but_fresh_optimizer_and_schedule(self):
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
+            root = Path(directory)
+            config = replace(ChimeraConfig.preset("tiny"), num_classes=4)
+            torch.manual_seed(71)
+            model = Chimera(config)
+            source = root / "source.pt"
+            optimizer = torch.optim.AdamW(model.parameters(), lr=0.9)
+            # État volontairement incompatible avec le nouvel entraînement.
+            save_checkpoint(source, model, optimizer=optimizer, step=99,
+                            trainer={"steps": 100, "seed": 71, "modality_policy": "balanced",
+                                     "validation_state": {"bad_evaluations": 50}})
+            initial = model.embedding.weight.detach().clone()
+            for name, with_optimizer in (("source", True), ("inference", False)):
+                path = source if with_optimizer else root / "inference.pt"
+                if not with_optimizer:
+                    save_checkpoint(path, model, step=99, trainer={"seed": 71})
+                destination = root / name
+                main(["--threads", "2", "train", "--init-from", str(path), "--steps", "2",
+                      "--batch-size", "2", "--seed", "8", "--lr", "0.001", "--warmup", "0",
+                      "--modality-dropout", "0", "--output", str(destination)])
+                trained, payload = load_checkpoint(destination / "latest.pt")
+                self.assertEqual(trained.config.num_classes, 4)
+                self.assertEqual(payload["step"], 2)
+                self.assertEqual(payload["trainer"]["seed"], 8)
+                self.assertEqual(payload["trainer"]["modality_policy"], "dropout")
+                self.assertEqual(payload["trainer"]["initialization"]["step"], 99)
+                self.assertTrue(all(int(state["step"]) <= 2 for state in payload["optimizer"]["state"].values()))
+                delta = (trained.embedding.weight - initial).abs()
+                self.assertGreater(delta.max().item(), 0)
+                self.assertLess(delta.max().item(), 0.003)
+            a, _ = load_checkpoint(root / "source/latest.pt")
+            b, _ = load_checkpoint(root / "inference/latest.pt")
+            for name, tensor in a.state_dict().items():
+                torch.testing.assert_close(tensor, b.state_dict()[name], rtol=0, atol=0, msg=name)
+            original, _ = load_checkpoint(source)
+            torch.testing.assert_close(original.embedding.weight, initial, rtol=0, atol=0)
+
     def test_balanced_training_resumes_exactly_and_records_all_subsets(self):
         with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
             root = Path(directory)

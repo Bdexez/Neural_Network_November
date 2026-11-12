@@ -101,7 +101,7 @@ Les mesures utilisent les quantiles bruts. Toute nouvelle version des poids doit
 
 ## Vérifications
 
-Les **75 tests passent**. Ils vérifient les prédictions initiales identiques, le gradient de la projection, le padding et les variables entièrement absentes, le transfert strict et la sauvegarde des changements, la reprise exacte avec dropout et accumulation, le cache multimodal et le backward BF16 avec recalcul d'activations. Un test DDP à deux processus CPU exécute aussi le transfert et l'augmentation.
+Les **76 tests passent**. Ils vérifient les prédictions initiales identiques, le gradient de la projection, le padding et les variables entièrement absentes, le transfert strict et la sauvegarde des changements, la reprise exacte avec dropout et accumulation, le cache multimodal et le backward BF16 avec recalcul d'activations. Un test DDP à deux processus CPU exécute aussi le transfert et l'augmentation. Le benchmark accepte aussi un checkpoint interrompu avant la première validation : l'absence de meilleur score est représentée par `null` dans son rapport, sans modifier le checkpoint ni masquer les valeurs non finies des mesures.
 
 Les anciens checkpoints ont été réévalués sur les mêmes 64 exemples et les sept combinaisons du rapport précédent : la différence maximale de qualité mesurée est **zéro**. Les sorties sont dans [statistics-tests.txt](artifacts/statistics-tests.txt), [statistics-tests.json](artifacts/statistics-tests.json) et [statistics-legacy-compatibility.json](artifacts/statistics-legacy-compatibility.json). Le chemin GPU n'a pas été exécuté ici.
 

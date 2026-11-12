@@ -66,6 +66,7 @@ test_one_available_modality_and_invalid_batches (test_modalities.ModalityTests.t
 test_resume_and_distributed_partition_preserve_global_schedule_and_rng (test_modalities.ModalityTests.test_resume_and_distributed_partition_preserve_global_schedule_and_rng) ... ok
 test_checkpoint_transfer_is_explicit_zero_initialized_and_strict (test_temporal_statistics.TemporalStatisticsTests.test_checkpoint_transfer_is_explicit_zero_initialized_and_strict) ... ok
 test_comparison_requires_identical_input_and_target_semantics (test_temporal_statistics.TemporalStatisticsTests.test_comparison_requires_identical_input_and_target_semantics) ... ok
+test_early_checkpoint_benchmark_serializes_absent_best_score_without_mutation (test_temporal_statistics.TemporalStatisticsTests.test_early_checkpoint_benchmark_serializes_absent_best_score_without_mutation) ... ok
 test_override_finetuning_and_exact_resume_restore_the_extended_model (test_temporal_statistics.TemporalStatisticsTests.test_override_finetuning_and_exact_resume_restore_the_extended_model) ... ok
 test_raw_level_and_scale_become_visible_to_the_encoder (test_temporal_statistics.TemporalStatisticsTests.test_raw_level_and_scale_become_visible_to_the_encoder) ... ok
 test_statistics_ignore_padding_and_handle_an_entire_missing_feature (test_temporal_statistics.TemporalStatisticsTests.test_statistics_ignore_padding_and_handle_an_entire_missing_feature) ... ok
@@ -75,6 +76,6 @@ test_balanced_augmented_training_resumes_exactly_and_records_all_subsets (test_t
 test_finetuning_uses_source_weights_but_fresh_optimizer_and_schedule (test_training_policies.TrainingPolicyTests.test_finetuning_uses_source_weights_but_fresh_optimizer_and_schedule) ... ok
 
 ----------------------------------------------------------------------
-Ran 75 tests in 19.292s
+Ran 76 tests in 10.486s
 
 OK

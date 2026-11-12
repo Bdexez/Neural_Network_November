@@ -81,7 +81,13 @@ def main():
         if reference_config is not None and signature != reference_config:
             raise ValueError("Les checkpoints doivent partager les mêmes entrées et cibles d'évaluation")
         reference_config = signature
-        entry = dict(checkpoint=path, step=payload["step"], trainer=payload.get("trainer", {}),
+        trainer = dict(payload.get("trainer", {}))
+        validation = trainer.get("validation_state", {})
+        # Un arrêt avant la première validation garde +inf en interne. Dans un
+        # rapport JSON, l'absence de meilleur score est représentée par null.
+        if validation.get("best_step") is None and validation.get("best_loss") == float("inf"):
+            trainer["validation_state"] = dict(validation, best_loss=None)
+        entry = dict(checkpoint=path, step=payload["step"], trainer=trainer,
                      config=model.config.to_dict(), cases={})
         del payload
         for case in args.cases:

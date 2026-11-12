@@ -3,6 +3,8 @@ from contextlib import redirect_stderr, redirect_stdout
 import hashlib
 import io
 import json
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 import unittest
@@ -155,6 +157,23 @@ class TemporalStatisticsTests(unittest.TestCase):
                        dict(quantiles=(0.05, 0.5, 0.95)), dict(max_series_len=64)):
             self.assertNotEqual(evaluation_data_signature(original),
                                 evaluation_data_signature(replace(original, **change)))
+
+    def test_early_checkpoint_benchmark_serializes_absent_best_score_without_mutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkpoint, output = root / "early.pt", root / "report.json"
+            save_checkpoint(checkpoint, Chimera(ChimeraConfig.preset("tiny")), step=1,
+                            trainer={"validation_state": {"best_loss": float("inf"), "best_step": None}})
+            script = Path(__file__).resolve().parents[1] / "tools/benchmark_robustness.py"
+            result = subprocess.run([sys.executable, str(script), "--reference-checkpoint", str(checkpoint),
+                                     "--checkpoint", str(checkpoint), "--batches", "1", "--batch-size", "2",
+                                     "--threads", "2", "--cases", "history8", "--output", str(output)],
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads(output.read_text())
+            self.assertIsNone(report["checkpoints"]["source"]["trainer"]["validation_state"]["best_loss"])
+            _, payload = load_checkpoint(checkpoint)
+            self.assertEqual(payload["trainer"]["validation_state"]["best_loss"], float("inf"))
 
 
 if __name__ == "__main__":

@@ -1,8 +1,8 @@
 {
   "tests": {
-    "tests_run": 75,
-    "seconds": 19.292,
-    "wall_seconds": 21.243072627999936,
+    "tests_run": 76,
+    "seconds": 10.486,
+    "wall_seconds": 11.453648841008544,
     "exit_code": 0,
     "success": true,
     "command": ".venv/bin/python -m unittest discover -s tests -v"
@@ -201,5 +201,12 @@
     }
   },
   "scope": "One paired training seed, synthetic held-out examples only; improved classification with mixed forecasting outcomes.",
-  "source_checkpoint_digest_matches_recorded_value": true
+  "source_checkpoint_digest_matches_recorded_value": true,
+  "early_checkpoint_report_smoke": {
+    "before_exit_code": 1,
+    "before_error": "Out of range float values are not JSON compliant: inf",
+    "after_exit_code": 0,
+    "best_loss_in_report": null,
+    "raw_checkpoint_state_preserved": true
+  }
 }

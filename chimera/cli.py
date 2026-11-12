@@ -1,6 +1,7 @@
 import argparse
 from contextlib import contextmanager, nullcontext
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -12,6 +13,7 @@ from torch.utils.data import DataLoader
 from .calibration import ForecastCalibration, file_sha256, fit_calibration
 from .config import ChimeraConfig
 from .data import JointDataset, collate_records, synthetic_batch
+from .forecast_adapter import fit_forecast_adapter
 from .model import Chimera
 from .tokenizer import ByteTokenizer
 from .training import evaluate, load_checkpoint, save_checkpoint, train
@@ -148,6 +150,16 @@ def main(argv=None):
     calibrating.add_argument("--coverage", type=float, help="Couverture cible ; défaut : quantile max - min")
     calibrating.add_argument("--device", default="cpu")
     calibrating.add_argument("--amp", choices=("none", "bf16", "fp16"), default="none")
+    refining = commands.add_parser("refine-forecast", help="Ajuster seulement la correction des historiques courts")
+    refining.add_argument("--checkpoint", required=True)
+    refining.add_argument("--data", required=True, help="JSONL avec series et future ; autres modalités facultatives")
+    refining.add_argument("--output", required=True, help="Nouveau checkpoint d'inférence")
+    refining.add_argument("--report", help="Rapport JSON de provenance et d'ajustement")
+    refining.add_argument("--context", type=int, default=8, help="Derniers pas utilisés par la correction")
+    refining.add_argument("--ridge", type=float, default=0.001)
+    refining.add_argument("--batch-size", type=int, default=32)
+    refining.add_argument("--device", default="cpu")
+    refining.add_argument("--amp", choices=("none", "bf16", "fp16"), default="none")
     args = parser.parse_args(argv)
     if args.threads < 1:
         parser.error("threads doit être > 0")
@@ -254,6 +266,36 @@ def main(argv=None):
         del payload
         save_checkpoint(args.output, model, step=step, trainer=trainer)
         print(f"Poids d'inférence écrits dans {args.output}")
+    elif args.command == "refine-forecast":
+        if args.batch_size < 1 or args.context < 1 or not math.isfinite(args.ridge) or args.ridge <= 0:
+            parser.error("batch-size, context et ridge doivent être strictement positifs ; ridge doit être fini")
+        inputs = {Path(path).resolve() for path in (args.checkpoint, args.data)}
+        outputs = [Path(path).resolve() for path in (args.output, args.report) if path]
+        if any(path in inputs for path in outputs) or len(set(outputs)) != len(outputs):
+            parser.error("Les sorties doivent être distinctes entre elles et des fichiers d'entrée")
+        model, payload = load_checkpoint(args.checkpoint, args.device,
+                                         overrides={"forecast_adapter_context": args.context})
+        step = payload["step"]
+        seed = payload.get("trainer", {}).get("seed", 42)
+        del payload
+        dataset = JointDataset(args.data, model.config)
+        loader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=collate_records,
+                            generator=torch.Generator().manual_seed(0))
+        report = fit_forecast_adapter(model, loader, ridge=args.ridge, amp=args.amp)
+        report.update(parent_checkpoint=str(Path(args.checkpoint).resolve()),
+                      parent_sha256=file_sha256(args.checkpoint), parent_step=step,
+                      dataset_sha256=dataset.fingerprint, data=str(Path(args.data).resolve()),
+                      output=str(Path(args.output).resolve()), batch_size=args.batch_size,
+                      device=str(next(model.parameters()).device), torch_version=str(torch.__version__))
+        # Le compteur d'optimisation du parent n'est pas un nombre d'étapes ridge.
+        # Ne pas transmettre ses anciens scores de validation au nouveau modèle.
+        content = json.dumps(report, indent=2, allow_nan=False) + "\n"
+        save_checkpoint(args.output, model, step=step,
+                        trainer=dict(seed=seed, inference_only=True, forecast_adapter_fit=report))
+        if args.report:
+            with prediction_stream(args.report) as stream:
+                stream.write(content)
+        print(content, end="")
     elif args.command in ("evaluate", "calibrate"):
         if args.batch_size < 1:
             parser.error("batch-size doit être > 0")

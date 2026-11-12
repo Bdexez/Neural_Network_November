@@ -42,6 +42,7 @@ def measure(model, batches):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--reference-checkpoint", help="Comparer à ces poids plutôt qu'à une initialisation aléatoire")
     parser.add_argument("--output", default="artifacts/benchmark.json")
     parser.add_argument("--batches", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=8)
@@ -54,6 +55,7 @@ def main():
     config = ChimeraConfig.from_dict(payload["config"])
     step = payload["step"]
     seed = payload.get("trainer", {}).get("seed", 42)
+    initialization = payload.get("trainer", {}).get("initialization")
     del payload
     batches = [synthetic_batch(config, batch_size=args.batch_size, seed=2000000 + i)
                for i in range(args.batches)]
@@ -63,8 +65,16 @@ def main():
         prediction = batch["series"][:, -1:, :].expand_as(target)
         persistence_error += (prediction - target).abs().sum().item()
         values += target.numel()
-    seed_everything(seed)
-    initial = Chimera(config)
+    reference = {"seed": seed, "kind": "random_initialization"}
+    if args.reference_checkpoint:
+        initial, payload = load_checkpoint(args.reference_checkpoint)
+        if initial.config.to_dict() != config.to_dict():
+            raise ValueError("Le checkpoint de référence doit utiliser la même configuration")
+        reference = {"checkpoint": args.reference_checkpoint, "step": payload["step"], "kind": "checkpoint"}
+        del payload
+    else:
+        seed_everything(seed)
+        initial = Chimera(config)
     before = measure(initial, batches)
     del initial
     gc.collect()
@@ -73,6 +83,7 @@ def main():
     after = measure(trained, batches)
     report = {
         "checkpoint": args.checkpoint, "training_steps": step,
+        "reference": reference, "initialization": initialization,
         "torch_version": torch.__version__, "evaluation_seed_start": 2000000,
         "evaluation_examples": args.batches * args.batch_size,
         "architecture": inspect_config(config), "before": before, "after": after,

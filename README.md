@@ -12,6 +12,8 @@ Les [améliorations mesurées](IMPROVEMENTS.md) décrivent le cache borné, le c
 
 Le [suivi de l'apprentissage](LEARNING.md) présente le fine-tuning du modèle existant, la comparaison des politiques de modalités et leurs compromis mesurés.
 
+La [calibration des prévisions](CALIBRATION.md) ajuste les intervalles sur un jeu séparé et mesure leur couverture sur un test indépendant, avec des résultats pour les sept combinaisons de modalités.
+
 ## Démarrage
 
 Python 3.11 ou plus récent. Dans cet espace de travail, `.venv` contient déjà PyTorch CPU.

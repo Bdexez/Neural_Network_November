@@ -36,6 +36,7 @@ class ChimeraConfig:
     forecast_horizon: int = 12
     forecast_context: int = 32
     forecast_adapter_context: int = 0
+    forecast_adapter_relative: bool = False
     quantiles: tuple[float, ...] = (0.1, 0.5, 0.9)
     prediction_steps: int = 2
     balance_weight: float = 0.01
@@ -101,6 +102,8 @@ class ChimeraConfig:
             raise ValueError("gradient_checkpointing doit être booléen")
         if type(self.temporal_statistics) is not bool:
             raise ValueError("temporal_statistics doit être booléen")
+        if type(self.forecast_adapter_relative) is not bool:
+            raise ValueError("forecast_adapter_relative doit être booléen")
 
     def to_dict(self):
         return asdict(self)

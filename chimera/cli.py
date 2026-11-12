@@ -156,6 +156,8 @@ def main(argv=None):
     refining.add_argument("--output", required=True, help="Nouveau checkpoint d'inférence")
     refining.add_argument("--report", help="Rapport JSON de provenance et d'ajustement")
     refining.add_argument("--context", type=int, default=8, help="Derniers pas utilisés par la correction")
+    refining.add_argument("--relative-features", action=argparse.BooleanOptionalAction, default=None,
+                          help="Statistiques sans niveau ni échelle absolus ; sinon conserver le mode du parent")
     refining.add_argument("--ridge", type=float, default=0.001)
     refining.add_argument("--batch-size", type=int, default=32)
     refining.add_argument("--device", default="cpu")
@@ -273,8 +275,10 @@ def main(argv=None):
         outputs = [Path(path).resolve() for path in (args.output, args.report) if path]
         if any(path in inputs for path in outputs) or len(set(outputs)) != len(outputs):
             parser.error("Les sorties doivent être distinctes entre elles et des fichiers d'entrée")
-        model, payload = load_checkpoint(args.checkpoint, args.device,
-                                         overrides={"forecast_adapter_context": args.context})
+        overrides = {"forecast_adapter_context": args.context}
+        if args.relative_features is not None:
+            overrides["forecast_adapter_relative"] = args.relative_features
+        model, payload = load_checkpoint(args.checkpoint, args.device, overrides=overrides)
         step = payload["step"]
         seed = payload.get("trainer", {}).get("seed", 42)
         del payload

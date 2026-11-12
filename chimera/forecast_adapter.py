@@ -25,6 +25,7 @@ class ForecastAdapter(nn.Module):
         self.context = config.forecast_adapter_context
         self.reference = config.forecast_context
         self.median_index = config.quantiles.index(0.5)
+        self.relative = config.forecast_adapter_relative
         self.proj = nn.Linear(2 * self.context + 4 + config.forecast_horizon, config.forecast_horizon)
 
     def prepare(self, series, valid, mean, scale):
@@ -44,8 +45,12 @@ class ForecastAdapter(nn.Module):
         normalized = (clean.gather(1, indices) - anchor[:, None]) / scale[:, None]
         normalized = torch.where(flags, normalized, 0.0)
         length = valid.sum(-1).float().clamp_min(1)
-        summary = torch.stack((mean.asinh(), scale.log(), anchor.asinh(),
-                               (length[:, None].expand_as(mean) / self.reference).log()), dim=-1)
+        duration = (length[:, None].expand_as(mean) / self.reference).log()
+        if self.relative:
+            age = (valid[..., None] & (positions[..., None] > last[:, None])).sum(1) / length[:, None]
+            summary = torch.stack(((mean - anchor) / scale, observed.sum(1) / length[:, None], age, duration), dim=-1)
+        else:
+            summary = torch.stack((mean.asinh(), scale.log(), anchor.asinh(), duration), dim=-1)
         history = torch.cat((normalized.transpose(1, 2), flags.float().transpose(1, 2), summary), dim=-1)
         gate = (1 - length / self.reference).clamp(0, 1)
         return ForecastAdapterContext(history, anchor, scale, gate)
@@ -144,6 +149,7 @@ def fit_forecast_adapter(model, batches, *, ridge=0.001, amp="none"):
             adapter.proj.bias.copy_(bias)
         return dict(method="ridge", ridge=ridge, examples=examples, active_examples=active_examples,
                     observed_targets_by_horizon=counts.tolist(), context=adapter.context, amp=amp,
+                    features="relative" if adapter.relative else "absolute",
                     updated_parameters=sum(p.numel() for p in adapter.parameters()))
     finally:
         hook.remove()

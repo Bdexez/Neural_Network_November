@@ -19,6 +19,51 @@ class ForecastAdapterTests(unittest.TestCase):
     def setUp(self):
         torch.manual_seed(39)
 
+    def test_relative_context_is_translation_invariant_and_tracks_missing_value_age(self):
+        config = replace(ChimeraConfig.preset("tiny"), forecast_adapter_context=8, forecast_adapter_relative=True)
+        model = Chimera(config).eval()
+        batch = synthetic_batch(config, batch_size=2, seed=704)
+        series = batch["series"][:, -8:].clone()
+        valid = batch["series_mask"][:, -8:]
+        series[0, :, 1] = float("nan")
+        series[1, -2:, 0] = float("nan")
+        with torch.inference_mode():
+            _, _, mean, scale, _ = model.temporal(series, valid)
+            before = model.forecast_adapter.prepare(series, valid, mean, scale)
+            after = model.forecast_adapter.prepare(series + 20, valid, mean + 20, scale)
+        torch.testing.assert_close(before.history, after.history, rtol=2e-5, atol=1e-5)
+        self.assertEqual(before.history[0, 1, -3].item(), 0)  # Fraction observée.
+        self.assertEqual(before.history[0, 1, -2].item(), 1)  # Variable entièrement absente.
+        self.assertEqual(before.history[1, 0, -2].item(), 0.25)
+        with self.assertRaises(ValueError):
+            replace(config, forecast_adapter_relative=1)
+
+    def test_changing_feature_semantics_resets_only_adapter_and_roundtrips_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "absolute.pt"
+            config = replace(ChimeraConfig.preset("tiny"), forecast_adapter_context=8)
+            original = Chimera(config).eval()
+            torch.nn.init.normal_(original.forecast_adapter.proj.weight, std=0.02)
+            save_checkpoint(path, original)
+            relative, _ = load_checkpoint(path, overrides={"forecast_adapter_relative": True})
+            self.assertEqual(relative.forecast_adapter.proj.weight.count_nonzero().item(), 0)
+            for name, value in original.state_dict().items():
+                if not name.startswith("forecast_adapter."):
+                    torch.testing.assert_close(value, relative.state_dict()[name], rtol=0, atol=0)
+            torch.nn.init.normal_(relative.forecast_adapter.proj.weight, std=0.02)
+            batch = synthetic_batch(config, batch_size=2, seed=705)
+            ids, series = batch["input_ids"][:, :8], batch["series"][:, -8:]
+            relative.eval()
+            with torch.inference_mode():
+                full = relative(ids, series=series)
+                prefix = relative(ids[:, :3], series=series, use_cache=True)
+                cached = relative(ids[:, 3:], cache=prefix.cache, use_cache=True)
+            torch.testing.assert_close(full.forecast, cached.forecast, rtol=2e-5, atol=2e-6)
+            save_checkpoint(Path(directory) / "relative.pt", relative)
+            restored, _ = load_checkpoint(Path(directory) / "relative.pt")
+            self.assertTrue(restored.forecast_adapter.relative)
+            torch.testing.assert_close(restored.forecast_adapter.proj.weight, relative.forecast_adapter.proj.weight)
+
     def test_zero_initialization_preserves_outputs_and_active_head_only_changes_short_forecasts(self):
         config = ChimeraConfig.preset("tiny")
         original = Chimera(config).eval()

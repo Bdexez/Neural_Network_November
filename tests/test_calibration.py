@@ -2,6 +2,7 @@ from dataclasses import replace
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 import torch
@@ -9,6 +10,7 @@ import torch
 from chimera import Chimera, ChimeraConfig
 from chimera.calibration import ForecastCalibration, conformity_scores, file_sha256, fit_calibration
 from chimera.data import synthetic_batch
+from chimera.evaluation import evaluate
 
 
 class CalibrationTests(unittest.TestCase):
@@ -46,6 +48,49 @@ class CalibrationTests(unittest.TestCase):
         covered = ((targets[1000:] >= interval[..., 0]) & (targets[1000:] <= interval[..., 1])).float().mean()
         self.assertAlmostEqual(covered.item(), 0.8, delta=0.025)
         self.assertLess((interval[..., 1] - interval[..., 0]).mean().item(), 2)
+
+    def test_evaluation_preserves_point_metrics_and_weights_missing_targets_correctly(self):
+        model = Chimera(ChimeraConfig.preset("tiny")).train()
+        fitted = fit_calibration(model, [synthetic_batch(model.config, batch_size=12, seed=190)])
+        batch = synthetic_batch(model.config, batch_size=7, seed=191)
+        batch["forecast_targets"][1:3] = float("nan")
+        batch["forecast_targets"][:, -1] = float("nan")
+        raw = evaluate(model, [batch])
+        full = evaluate(model, [batch], calibration=fitted)
+        split = evaluate(model, [{key: value[section] for key, value in batch.items()}
+                                 for section in (slice(0, 2), slice(2, 7))], calibration=fitted)
+        for name in ("forecast_mae", "accuracy", "text", "forecast_interval_coverage", "forecast_interval_width"):
+            self.assertEqual(raw[name], full[name], name)
+        for name in ("calibrated_interval_coverage", "calibrated_interval_width", "calibrated_interval_score",
+                     "forecast_interval_score"):
+            self.assertAlmostEqual(full[name], split[name], places=5, msg=name)
+        self.assertIsNone(full["calibrated_interval_coverage_by_horizon"][-1])
+        self.assertIsNone(full["forecast_interval_width_by_horizon"][-1])
+        self.assertTrue(model.training)
+        bad = {"series": batch["series"], "forecast_targets": batch["forecast_targets"]}
+        with self.assertRaisesRegex(ValueError, "modalités"):
+            evaluate(model, [bad], calibration=fitted)
+        self.assertTrue(model.training)
+
+    def test_interval_score_penalizes_width_and_missed_targets(self):
+        class FixedForecast(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.anchor = torch.nn.Parameter(torch.zeros(()))
+                self.config = replace(ChimeraConfig.preset("tiny"), forecast_horizon=1, series_features=1)
+
+            def forward(self, series, **kwargs):
+                forecast = series.new_tensor([0., 1., 2.]).expand(series.size(0), 1, 1, 3)
+                return SimpleNamespace(forecast=forecast, loss=None, losses={"forecast": self.anchor * 0})
+
+        model = FixedForecast()
+        fitted = ForecastCalibration((0.1, 0.5, 0.9), 0.8, [[1.]], [[20]], ("series",))
+        report = evaluate(model, [dict(series=torch.ones(3, 1, 1),
+                                       forecast_targets=torch.tensor([-1., 1., 3.])[:, None, None])],
+                          calibration=fitted)
+        self.assertAlmostEqual(report["forecast_interval_score"], 26 / 3)
+        self.assertAlmostEqual(report["calibrated_interval_score"], 4)
+        self.assertEqual(report["calibrated_interval_coverage"], 1)
 
     def test_exact_finite_sample_rank_instead_of_interpolation_or_clipping(self):
         scores = torch.arange(9, dtype=torch.float64)[:, None, None]

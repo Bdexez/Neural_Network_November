@@ -46,10 +46,13 @@ def main():
     parser.add_argument("--output", default="artifacts/benchmark.json")
     parser.add_argument("--batches", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--seed-start", type=int, default=2000000, help="Première seed des lots de test synthétiques")
     parser.add_argument("--threads", type=int, default=4)
     args = parser.parse_args()
     if min(args.batches, args.batch_size, args.threads) < 1:
         parser.error("batches, batch-size et threads doivent être > 0")
+    if args.seed_start < 0:
+        parser.error("seed-start doit être >= 0")
     torch.set_num_threads(args.threads)
     payload = torch.load(args.checkpoint, map_location="cpu", weights_only=True, mmap=True)
     config = ChimeraConfig.from_dict(payload["config"])
@@ -57,7 +60,7 @@ def main():
     seed = payload.get("trainer", {}).get("seed", 42)
     initialization = payload.get("trainer", {}).get("initialization")
     del payload
-    batches = [synthetic_batch(config, batch_size=args.batch_size, seed=2000000 + i)
+    batches = [synthetic_batch(config, batch_size=args.batch_size, seed=args.seed_start + i)
                for i in range(args.batches)]
     persistence_error, values = 0, 0
     for batch in batches:
@@ -84,7 +87,7 @@ def main():
     report = {
         "checkpoint": args.checkpoint, "training_steps": step,
         "reference": reference, "initialization": initialization,
-        "torch_version": torch.__version__, "evaluation_seed_start": 2000000,
+        "torch_version": torch.__version__, "evaluation_seed_start": args.seed_start,
         "evaluation_examples": args.batches * args.batch_size,
         "architecture": inspect_config(config), "before": before, "after": after,
         "persistence_forecast_mae": persistence_error / values,

@@ -56,7 +56,7 @@ class ForecastAdapterCliTests(unittest.TestCase):
             self.assertTrue(any(value is None for row in rows for step in row["series"] for value in step))
             self.assertTrue(all(set(row) == {"series", "future"} for row in rows))
             args = ["--threads", "2", "refine-forecast", "--checkpoint", str(source), "--data", str(data),
-                    "--batch-size", "16", "--output", str(output), "--report", str(report)]
+                    "--batch-size", "16", "--output", str(output), "--report", str(report), "--relative-features"]
             main(args)
             fitted, payload = load_checkpoint(output)
             fit = json.loads(report.read_text())
@@ -69,6 +69,8 @@ class ForecastAdapterCliTests(unittest.TestCase):
             self.assertEqual(fit["examples"], 96)
             self.assertGreater(fit["active_examples"], 0)
             self.assertEqual(fit["updated_parameters"], 396)
+            self.assertEqual(fit["features"], "relative")
+            self.assertTrue(fitted.forecast_adapter.relative)
             for name, value in original.state_dict().items():
                 torch.testing.assert_close(fitted.state_dict()[name], value, rtol=0, atol=0)
             predictions = root / "predictions.jsonl"

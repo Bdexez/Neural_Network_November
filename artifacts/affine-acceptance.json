@@ -1,0 +1,581 @@
+{
+  "tests": {
+    "tests_run": 88,
+    "seconds": 17.739,
+    "exit_code": 0,
+    "success": true,
+    "command": ".venv/bin/python -m unittest discover -s tests -v"
+  },
+  "training": {
+    "data": {
+      "settings": {
+        "checkpoint": "runs/workstation-statistics/model.pt",
+        "output": "runs/affine-refinement/train.jsonl",
+        "examples": 4096,
+        "batch_size": 64,
+        "seed": 80000,
+        "augmentation_seed": 1080000,
+        "min_history": 8,
+        "missing_rate": 0.2,
+        "mask_probability": 0.5,
+        "affine_probability": 0.5,
+        "min_scale": 0.1,
+        "max_scale": 10.0,
+        "max_shift": 20.0,
+        "affine_seed": 2080000
+      },
+      "dataset_sha256": "458cfb584ddecaf47f1271e8e12dc4bef51a6c074f54724811dab62de435b0aa",
+      "lengths": {
+        "8": 160,
+        "9": 176,
+        "10": 165,
+        "11": 170,
+        "12": 170,
+        "13": 164,
+        "14": 157,
+        "15": 155,
+        "16": 170,
+        "17": 171,
+        "18": 150,
+        "19": 169,
+        "20": 161,
+        "21": 151,
+        "22": 184,
+        "23": 160,
+        "24": 150,
+        "25": 168,
+        "26": 175,
+        "27": 159,
+        "28": 152,
+        "29": 152,
+        "30": 176,
+        "31": 166,
+        "32": 165
+      },
+      "missing_values": 24829,
+      "values": 245247
+    },
+    "models": {
+      "relative": {
+        "sha256": "eee5bd1b2ec494891a361b76e8b9a0f7ba11969f6a32e145153a4970ec2ae6b0",
+        "changed_base_tensors": [],
+        "unchanged_base_tensors": 760,
+        "fit": {
+          "method": "ridge",
+          "ridge": 0.001,
+          "examples": 4096,
+          "active_examples": 3931,
+          "observed_targets_by_horizon": [
+            11793,
+            11793,
+            11793,
+            11793,
+            11793,
+            11793,
+            11793,
+            11793,
+            11793,
+            11793,
+            11793,
+            11793
+          ],
+          "context": 8,
+          "amp": "none",
+          "features": "relative",
+          "updated_parameters": 396,
+          "parent_checkpoint": "/home/bdex/delivery/Neural_Network_November/runs/workstation-statistics/model.pt",
+          "parent_sha256": "f9051ef8eb69fa588993e1f6407a763d75aaa35af064f8219e6ca99f557dca33",
+          "parent_step": 180,
+          "dataset_sha256": "458cfb584ddecaf47f1271e8e12dc4bef51a6c074f54724811dab62de435b0aa",
+          "data": "/home/bdex/delivery/Neural_Network_November/runs/affine-refinement/train.jsonl",
+          "output": "/home/bdex/delivery/Neural_Network_November/runs/workstation-affine-relative/model.pt",
+          "batch_size": 64,
+          "device": "cpu",
+          "torch_version": "2.15.0+cpu"
+        },
+        "optimizer_saved": false
+      },
+      "control": {
+        "sha256": "b926ac69dd36a1b682b8ff501eebc7a33f27d5c551abfb2c8db3a0c6e6749f76",
+        "changed_base_tensors": [],
+        "unchanged_base_tensors": 760,
+        "fit": {
+          "method": "ridge",
+          "ridge": 0.001,
+          "examples": 4096,
+          "active_examples": 3931,
+          "observed_targets_by_horizon": [
+            11793,
+            11793,
+            11793,
+            11793,
+            11793,
+            11793,
+            11793,
+            11793,
+            11793,
+            11793,
+            11793,
+            11793
+          ],
+          "context": 8,
+          "amp": "none",
+          "features": "absolute",
+          "updated_parameters": 396,
+          "parent_checkpoint": "/home/bdex/delivery/Neural_Network_November/runs/workstation-statistics/model.pt",
+          "parent_sha256": "f9051ef8eb69fa588993e1f6407a763d75aaa35af064f8219e6ca99f557dca33",
+          "parent_step": 180,
+          "dataset_sha256": "458cfb584ddecaf47f1271e8e12dc4bef51a6c074f54724811dab62de435b0aa",
+          "data": "/home/bdex/delivery/Neural_Network_November/runs/affine-refinement/train.jsonl",
+          "output": "/home/bdex/delivery/Neural_Network_November/runs/workstation-affine-control/model.pt",
+          "batch_size": 64,
+          "device": "cpu",
+          "torch_version": "2.15.0+cpu"
+        },
+        "optimizer_saved": false
+      }
+    }
+  },
+  "unique_underlying_test_examples": 128,
+  "evaluation_conditions": 50,
+  "metrics": {
+    "history8": {
+      "original": {
+        "series": {
+          "source": 0.2661087708052542,
+          "control": 0.29113325378582683,
+          "candidate": 0.26271448810641435,
+          "persistence": 0.507722732001437
+        },
+        "all": {
+          "source": 0.2807566327192035,
+          "control": 0.33550962614632834,
+          "candidate": 0.31107133898977835,
+          "persistence": 0.507722732001437
+        }
+      },
+      "offset20": {
+        "series": {
+          "source": 0.5824847440752718,
+          "control": 0.2841700079540412,
+          "candidate": 0.25326023085249794,
+          "persistence": 0.5077227474086814
+        },
+        "all": {
+          "source": 0.6639328151941299,
+          "control": 0.3662330052918858,
+          "candidate": 0.35202433582809234,
+          "persistence": 0.5077227474086814
+        }
+      },
+      "scale01": {
+        "series": {
+          "source": 0.4610508496039579,
+          "control": 0.33086963220114285,
+          "candidate": 0.2747605938328787,
+          "persistence": 0.5077227413837843
+        },
+        "all": {
+          "source": 0.5205759586475425,
+          "control": 0.4176498274685198,
+          "candidate": 0.3729314572271707,
+          "persistence": 0.5077227413837843
+        }
+      },
+      "scale10": {
+        "series": {
+          "source": 0.3202581014549651,
+          "control": 0.2598598449872548,
+          "candidate": 0.25245619162968874,
+          "persistence": 0.5077227310587962
+        },
+        "all": {
+          "source": 0.29635199432547477,
+          "control": 0.2996888692222354,
+          "candidate": 0.2951139788169207,
+          "persistence": 0.5077227310587962
+        }
+      },
+      "scale4_offset50": {
+        "series": {
+          "source": 0.5709542267852359,
+          "control": 0.28020361873010796,
+          "candidate": 0.2558784143378337,
+          "persistence": 0.507722740372022
+        },
+        "all": {
+          "source": 0.686017321008775,
+          "control": 0.4010950502836042,
+          "candidate": 0.39204379729926586,
+          "persistence": 0.507722740372022
+        }
+      }
+    },
+    "history16": {
+      "original": {
+        "series": {
+          "source": 0.1495033064624699,
+          "control": 0.17360428326719557,
+          "candidate": 0.17540158012100923,
+          "persistence": 0.507722732001437
+        },
+        "all": {
+          "source": 0.16090240551946206,
+          "control": 0.23241941057393786,
+          "candidate": 0.24803273617665886,
+          "persistence": 0.507722732001437
+        }
+      },
+      "offset20": {
+        "series": {
+          "source": 0.8377500350276629,
+          "control": 0.18119601863953802,
+          "candidate": 0.1848527006804943,
+          "persistence": 0.5077227474086814
+        },
+        "all": {
+          "source": 0.9915283636914359,
+          "control": 0.33445175054172677,
+          "candidate": 0.3727153839750422,
+          "persistence": 0.5077227474086814
+        }
+      },
+      "scale01": {
+        "series": {
+          "source": 0.36571757090188034,
+          "control": 0.25167922514823554,
+          "candidate": 0.23734321968302335,
+          "persistence": 0.5077227413837843
+        },
+        "all": {
+          "source": 0.4391971425929518,
+          "control": 0.33382794872169247,
+          "candidate": 0.33202078386643225,
+          "persistence": 0.5077227413837843
+        }
+      },
+      "scale10": {
+        "series": {
+          "source": 0.45380252054278064,
+          "control": 0.16248103677919262,
+          "candidate": 0.1618044400589295,
+          "persistence": 0.5077227310587962
+        },
+        "all": {
+          "source": 0.39701424083646597,
+          "control": 0.21061381173025842,
+          "candidate": 0.22512913091874603,
+          "persistence": 0.5077227310587962
+        }
+      },
+      "scale4_offset50": {
+        "series": {
+          "source": 0.6172226588759158,
+          "control": 0.1795137274182505,
+          "candidate": 0.1840581711795595,
+          "persistence": 0.507722740372022
+        },
+        "all": {
+          "source": 0.8204837519054612,
+          "control": 0.3837761313964923,
+          "candidate": 0.4138668371985356,
+          "persistence": 0.507722740372022
+        }
+      }
+    },
+    "complete": {
+      "original": {
+        "series": {
+          "source": 0.24634514301053262,
+          "control": 0.24634514301053262,
+          "candidate": 0.24634514301053262,
+          "persistence": 0.507722732001437
+        },
+        "all": {
+          "source": 0.24583764947399483,
+          "control": 0.24583764947399483,
+          "candidate": 0.24583764947399483,
+          "persistence": 0.507722732001437
+        }
+      },
+      "offset20": {
+        "series": {
+          "source": 0.35450273089938694,
+          "control": 0.35450273089938694,
+          "candidate": 0.35450273089938694,
+          "persistence": 0.5077227474086814
+        },
+        "all": {
+          "source": 0.5559825650933716,
+          "control": 0.5559825650933716,
+          "candidate": 0.5559825650933716,
+          "persistence": 0.5077227474086814
+        }
+      },
+      "scale01": {
+        "series": {
+          "source": 0.3178423191909334,
+          "control": 0.3178423191909334,
+          "candidate": 0.3178423191909334,
+          "persistence": 0.5077227413837843
+        },
+        "all": {
+          "source": 0.3406993142065554,
+          "control": 0.3406993142065554,
+          "candidate": 0.3406993142065554,
+          "persistence": 0.5077227413837843
+        }
+      },
+      "scale10": {
+        "series": {
+          "source": 0.2935159686448363,
+          "control": 0.2935159686448363,
+          "candidate": 0.2935159686448363,
+          "persistence": 0.5077227310587962
+        },
+        "all": {
+          "source": 0.26486415307833033,
+          "control": 0.26486415307833033,
+          "candidate": 0.26486415307833033,
+          "persistence": 0.5077227310587962
+        }
+      },
+      "scale4_offset50": {
+        "series": {
+          "source": 0.3196497398118178,
+          "control": 0.3196497398118178,
+          "candidate": 0.3196497398118178,
+          "persistence": 0.507722740372022
+        },
+        "all": {
+          "source": 0.5169198573049572,
+          "control": 0.5169198573049572,
+          "candidate": 0.5169198573049572,
+          "persistence": 0.507722740372022
+        }
+      }
+    },
+    "history8_missing30": {
+      "original": {
+        "series": {
+          "source": 0.35719140955593,
+          "control": 0.4099838004480666,
+          "candidate": 0.41123317907517454,
+          "persistence": 0.5349169746979088
+        },
+        "all": {
+          "source": 0.350275139100025,
+          "control": 0.42305482965255375,
+          "candidate": 0.4231200425104665,
+          "persistence": 0.5349169746979088
+        }
+      },
+      "offset20": {
+        "series": {
+          "source": 0.6346493533088101,
+          "control": 0.4105016535354985,
+          "candidate": 0.41225289098090595,
+          "persistence": 0.5349170164101653
+        },
+        "all": {
+          "source": 0.7011846585406197,
+          "control": 0.4323152369923062,
+          "candidate": 0.4351737095663945,
+          "persistence": 0.5349170164101653
+        }
+      },
+      "scale01": {
+        "series": {
+          "source": 0.49199215041672534,
+          "control": 0.4310285426974284,
+          "candidate": 0.4159040692767727,
+          "persistence": 0.5349169847411556
+        },
+        "all": {
+          "source": 0.5610046628177972,
+          "control": 0.4961881572244743,
+          "candidate": 0.4723316306230016,
+          "persistence": 0.5349169847411556
+        }
+      },
+      "scale10": {
+        "series": {
+          "source": 0.4503035898798974,
+          "control": 0.4003476140742553,
+          "candidate": 0.4084138496992334,
+          "persistence": 0.5349169731088397
+        },
+        "all": {
+          "source": 0.4191164794594645,
+          "control": 0.4105453253106033,
+          "candidate": 0.42030242687550423,
+          "persistence": 0.5349169731088397
+        }
+      },
+      "scale4_offset50": {
+        "series": {
+          "source": 0.598104623456796,
+          "control": 0.40606872240702313,
+          "candidate": 0.4093844075169828,
+          "persistence": 0.5349169841243161
+        },
+        "all": {
+          "source": 0.7111641187220812,
+          "control": 0.4776488966825936,
+          "candidate": 0.48340476283596623,
+          "persistence": 0.5349169841243161
+        }
+      }
+    },
+    "history16_missing30": {
+      "original": {
+        "series": {
+          "source": 0.2679422889248397,
+          "control": 0.33652577042367837,
+          "candidate": 0.3394186160512618,
+          "persistence": 0.5349169746979088
+        },
+        "all": {
+          "source": 0.2572584505000527,
+          "control": 0.35065579669349567,
+          "candidate": 0.36163932495239554,
+          "persistence": 0.5349169746979088
+        }
+      },
+      "offset20": {
+        "series": {
+          "source": 0.8215676016277738,
+          "control": 0.34874020765225094,
+          "candidate": 0.34999606510003406,
+          "persistence": 0.5349170164101653
+        },
+        "all": {
+          "source": 0.9534551770322852,
+          "control": 0.4102892349991534,
+          "candidate": 0.4537757734457652,
+          "persistence": 0.5349170164101653
+        }
+      },
+      "scale01": {
+        "series": {
+          "source": 0.48477482774564523,
+          "control": 0.39793538421160213,
+          "candidate": 0.38918615427190967,
+          "persistence": 0.5349169847411556
+        },
+        "all": {
+          "source": 0.591928281435988,
+          "control": 0.5026851338865551,
+          "candidate": 0.49561998302275845,
+          "persistence": 0.5349169847411556
+        }
+      },
+      "scale10": {
+        "series": {
+          "source": 0.48878617670464636,
+          "control": 0.3228114348126433,
+          "candidate": 0.33151610819736055,
+          "persistence": 0.5349169731088397
+        },
+        "all": {
+          "source": 0.4206320899494232,
+          "control": 0.3344350769475568,
+          "candidate": 0.35565330838144293,
+          "persistence": 0.5349169731088397
+        }
+      },
+      "scale4_offset50": {
+        "series": {
+          "source": 0.6609870387862126,
+          "control": 0.34287216286692357,
+          "candidate": 0.34701344432930153,
+          "persistence": 0.5349169841243161
+        },
+        "all": {
+          "source": 0.8643820191630058,
+          "control": 0.4982360733879937,
+          "candidate": 0.524185516561071,
+          "persistence": 0.5349169841243161
+        }
+      }
+    }
+  },
+  "relative_variant_regressions_vs_previous": [
+    {
+      "case": "history8",
+      "transform": "original",
+      "modalities": "all",
+      "source_mae": 0.2807566327192035,
+      "candidate_mae": 0.31107133898977835,
+      "increase_fraction": 0.10797503153164634
+    },
+    {
+      "case": "history16",
+      "transform": "original",
+      "modalities": "series",
+      "source_mae": 0.1495033064624699,
+      "candidate_mae": 0.17540158012100923,
+      "increase_fraction": 0.17322876845563706
+    },
+    {
+      "case": "history16",
+      "transform": "original",
+      "modalities": "all",
+      "source_mae": 0.16090240551946206,
+      "candidate_mae": 0.24803273617665886,
+      "increase_fraction": 0.5415104291070272
+    },
+    {
+      "case": "history8_missing30",
+      "transform": "original",
+      "modalities": "series",
+      "source_mae": 0.35719140955593,
+      "candidate_mae": 0.41123317907517454,
+      "increase_fraction": 0.15129638640086762
+    },
+    {
+      "case": "history8_missing30",
+      "transform": "original",
+      "modalities": "all",
+      "source_mae": 0.350275139100025,
+      "candidate_mae": 0.4231200425104665,
+      "increase_fraction": 0.20796481188360838
+    },
+    {
+      "case": "history8_missing30",
+      "transform": "scale10",
+      "modalities": "all",
+      "source_mae": 0.4191164794594645,
+      "candidate_mae": 0.42030242687550423,
+      "increase_fraction": 0.002829636805427471
+    },
+    {
+      "case": "history16_missing30",
+      "transform": "original",
+      "modalities": "series",
+      "source_mae": 0.2679422889248397,
+      "candidate_mae": 0.3394186160512618,
+      "increase_fraction": 0.2667601572459206
+    },
+    {
+      "case": "history16_missing30",
+      "transform": "original",
+      "modalities": "all",
+      "source_mae": 0.2572584505000527,
+      "candidate_mae": 0.36163932495239554,
+      "increase_fraction": 0.4057432292290102
+    }
+  ],
+  "maximum_classification_accuracy_difference": 0.0,
+  "maximum_text_loss_difference": 0.0,
+  "full_history_metrics_exactly_equal": true,
+  "relative_beats_matched_control_clean_history8_all_transforms_and_modalities": true,
+  "limitations": [
+    "Synthetic affine transformations only; same underlying 128 held-out examples paired across conditions.",
+    "One training data realization per method; no seed variance estimate.",
+    "Absolute and relative augmented models regress on several original and masked cases.",
+    "Relative statistics do not guarantee exact affine equivariance of the whole model.",
+    "Forecast intervals are uncalibrated for these new checkpoints.",
+    "Classification remains sensitive to shifts; no GPU execution."
+  ]
+}

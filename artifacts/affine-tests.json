@@ -1,0 +1,7 @@
+{
+  "tests_run": 88,
+  "seconds": 17.739,
+  "exit_code": 0,
+  "success": true,
+  "command": ".venv/bin/python -m unittest discover -s tests -v"
+}

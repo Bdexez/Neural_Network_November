@@ -16,6 +16,8 @@ La [calibration des prévisions](CALIBRATION.md) ajuste les intervalles sur un j
 
 Les [historiques courts et observations manquantes](ROBUSTNESS.md) couvrent l'augmentation temporelle, sa reprise reproductible et les comparaisons avec un entraînement témoin.
 
+Les [statistiques temporelles](TEMPORAL_STATISTICS.md) ajoutent une projection optionnelle du niveau, de l'échelle et de la durée observée, ainsi qu'un transfert explicite vers des configurations compatibles.
+
 ## Démarrage
 
 Python 3.11 ou plus récent. Dans cet espace de travail, `.venv` contient déjà PyTorch CPU.

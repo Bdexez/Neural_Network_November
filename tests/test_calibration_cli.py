@@ -51,6 +51,12 @@ class CalibrationCliTests(unittest.TestCase):
                 for horizon, interval in zip(row["forecast"], row["calibrated_interval"]):
                     self.assertLessEqual(interval[0][0], horizon[0][1])
                     self.assertLessEqual(horizon[0][1], interval[0][1])
+            bf16_calibration = root / "calibration-bf16.json"
+            main(["calibrate", "--checkpoint", str(checkpoint), "--data", str(calibration_data),
+                  "--amp", "bf16", "--output", str(bf16_calibration)])
+            main(["predict", "--checkpoint", str(checkpoint), "--data", str(test_data),
+                  "--calibration", str(bf16_calibration), "--amp", "bf16", "--output", str(predictions)])
+            self.assertEqual(len(predictions.read_text().splitlines()), 7)
             other = root / "other.pt"
             save_checkpoint(other, Chimera(config))
             with self.assertRaisesRegex(ValueError, "checkpoint"):

@@ -1,0 +1,85 @@
+{
+  "tests": {
+    "tests_run": 63,
+    "seconds": 7.928,
+    "wall_seconds": 8.872157844001777,
+    "exit_code": 0,
+    "success": true,
+    "command": ".venv/bin/python -m unittest discover -s tests -v"
+  },
+  "checkpoint_sha256": "ea4f0fbb05e028fc0285f905e685299d8e261086f8c484ffe2abf25d49d9ed0b",
+  "calibration_examples": 512,
+  "test_examples": 512,
+  "calibration_seed_range": [
+    5000000,
+    5000031
+  ],
+  "test_seed_range": [
+    6000000,
+    6000031
+  ],
+  "per_modality": {
+    "text": {
+      "raw_coverage": 0.8372938368055556,
+      "calibrated_coverage": 0.8147786458333334,
+      "width_reduction_percent": 3.351317685173838,
+      "raw_interval_score": 1.652312112774881,
+      "calibrated_interval_score": 1.6408126343255087
+    },
+    "image": {
+      "raw_coverage": 0.83544921875,
+      "calibrated_coverage": 0.8131510416666666,
+      "width_reduction_percent": 4.263923186267792,
+      "raw_interval_score": 1.6181926948225334,
+      "calibrated_interval_score": 1.5980916623957455
+    },
+    "series": {
+      "raw_coverage": 0.8976779513888888,
+      "calibrated_coverage": 0.8223741319444444,
+      "width_reduction_percent": 17.539487257306675,
+      "raw_interval_score": 1.1214207265471083,
+      "calibrated_interval_score": 1.0412988817107462
+    },
+    "text+image": {
+      "raw_coverage": 0.8167860243055556,
+      "calibrated_coverage": 0.8125542534722222,
+      "width_reduction_percent": 0.3529504023395358,
+      "raw_interval_score": 1.5709874306824834,
+      "calibrated_interval_score": 1.5590451498024374
+    },
+    "text+series": {
+      "raw_coverage": 0.9114583333333334,
+      "calibrated_coverage": 0.83203125,
+      "width_reduction_percent": 19.506093436147477,
+      "raw_interval_score": 1.068232439890077,
+      "calibrated_interval_score": 0.9484304552323819
+    },
+    "image+series": {
+      "raw_coverage": 0.9004991319444444,
+      "calibrated_coverage": 0.8242730034722222,
+      "width_reduction_percent": 15.209056370762275,
+      "raw_interval_score": 1.114736251096474,
+      "calibrated_interval_score": 1.0058063560742692
+    },
+    "text+image+series": {
+      "raw_coverage": 0.8888888888888888,
+      "calibrated_coverage": 0.8299153645833334,
+      "width_reduction_percent": 9.43978229219905,
+      "raw_interval_score": 1.113767065757808,
+      "calibrated_interval_score": 1.026292600711814
+    }
+  },
+  "workstation_cli": {
+    "predictions": 3,
+    "interval_shape": [
+      12,
+      3,
+      2
+    ],
+    "median_contained": true,
+    "checkpoint": "runs/workstation-refined/model.pt",
+    "calibration": "runs/calibration-study/series.json"
+  },
+  "scope": "Local CPU tests and synthetic independent calibration/test samples only.",
+  "cpu_bf16_cli_roundtrip_verified": true
+}

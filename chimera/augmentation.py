@@ -59,3 +59,52 @@ class SeriesAugmentation:
             values.masked_fill_(missing & valid.unsqueeze(-1), float("nan"))
         result["series"] = values
         return result
+
+
+@dataclass(frozen=True)
+class SeriesAffineAugmentation:
+    """Changer les unités et le niveau, pour l'historique et ses futurs cibles."""
+
+    probability: float = 0.0
+    min_scale: float = 0.1
+    max_scale: float = 10.0
+    max_shift: float = 20.0
+
+    def __post_init__(self):
+        if not math.isfinite(self.probability) or not 0 <= self.probability <= 1:
+            raise ValueError("probability doit être finie et appartenir à [0, 1]")
+        if not all(math.isfinite(value) for value in (self.min_scale, self.max_scale, self.max_shift)):
+            raise ValueError("Les bornes affines doivent être finies")
+        if not 0 < self.min_scale <= self.max_scale or self.max_shift < 0:
+            raise ValueError("0 < min_scale <= max_scale et max_shift >= 0 requis")
+
+    def to_dict(self):
+        return asdict(self)
+
+    def __call__(self, batch, *, index, seed):
+        if type(index) is not int or index < 0:
+            raise ValueError("L'index d'augmentation doit être un entier positif ou nul")
+        if "series" not in batch or not self.probability:
+            return batch
+        series = batch["series"]
+        if series.ndim != 3 or not series.is_floating_point():
+            raise ValueError("series doit être flottant [B, T, F]")
+        future = batch.get("forecast_targets")
+        if future is not None and (future.ndim != 3 or future.shape[::2] != series.shape[::2]
+                                   or future.device != series.device or not future.is_floating_point()):
+            raise ValueError("forecast_targets doit être flottant [B, H, F] sur le device des séries")
+        generator = torch.Generator(device=series.device).manual_seed((seed + index * 1000003) % (2**63))
+        shape = (series.size(0), series.size(2))
+        gain = torch.rand(shape, generator=generator, device=series.device)
+        gain = (math.log(self.min_scale) + gain * (math.log(self.max_scale) - math.log(self.min_scale))).exp()
+        shift = (2 * torch.rand(shape, generator=generator, device=series.device) - 1) * self.max_shift
+        selected = torch.rand(series.size(0), 1, generator=generator, device=series.device) < self.probability
+        gain, shift = torch.where(selected, gain, 1), torch.where(selected, shift, 0)
+        result = dict(batch)
+        for key in ("series", "forecast_targets"):
+            if key in batch:
+                transformed = batch[key] * gain[:, None] + shift[:, None]
+                if (torch.isfinite(batch[key]) & ~torch.isfinite(transformed)).any():
+                    raise ValueError("L'augmentation affine dépasse la précision des données")
+                result[key] = transformed
+        return result

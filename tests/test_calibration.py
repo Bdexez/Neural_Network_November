@@ -49,6 +49,18 @@ class CalibrationTests(unittest.TestCase):
         self.assertAlmostEqual(covered.item(), 0.8, delta=0.025)
         self.assertLess((interval[..., 1] - interval[..., 0]).mean().item(), 2)
 
+    def test_mixed_precision_calibration_cannot_be_reused_with_another_precision(self):
+        model = Chimera(ChimeraConfig.preset("tiny")).train()
+        batch = synthetic_batch(model.config, batch_size=8, seed=195)
+        fitted = fit_calibration(model, [batch], amp="bf16")
+        restored = ForecastCalibration.from_dict(json.loads(json.dumps(fitted.to_dict())))
+        self.assertEqual(restored.amp, "bf16")
+        with self.assertRaisesRegex(ValueError, "précision"):
+            evaluate(model, [batch], calibration=restored)
+        self.assertTrue(model.training)
+        report = evaluate(model, [batch], amp="bf16", calibration=restored)
+        self.assertIsNotNone(report["calibrated_interval_coverage"])
+
     def test_evaluation_preserves_point_metrics_and_weights_missing_targets_correctly(self):
         model = Chimera(ChimeraConfig.preset("tiny")).train()
         fitted = fit_calibration(model, [synthetic_batch(model.config, batch_size=12, seed=190)])

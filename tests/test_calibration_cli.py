@@ -44,6 +44,8 @@ class CalibrationCliTests(unittest.TestCase):
             main(["predict", *common, "--output", str(predictions)])
             rows = [json.loads(line) for line in predictions.read_text().splitlines()]
             self.assertEqual(len(rows), 7)
+            with self.assertRaisesRegex(ValueError, "précision"):
+                main(["predict", *common, "--amp", "bf16"])
             for row in rows:
                 self.assertEqual(row["calibrated_nominal_coverage"], 0.8)
                 for horizon, interval in zip(row["forecast"], row["calibrated_interval"]):

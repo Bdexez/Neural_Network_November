@@ -47,6 +47,7 @@ class ForecastCalibration:
     modalities: tuple[str, ...]
     checkpoint_sha256: str | None = None
     dataset_sha256: str | None = None
+    amp: str = "none"
 
     def __post_init__(self):
         self.quantiles, self.modalities = tuple(self.quantiles), tuple(self.modalities)
@@ -56,6 +57,8 @@ class ForecastCalibration:
             raise ValueError("Des quantiles ordonnés contenant la médiane sont requis")
         if not math.isfinite(self.coverage) or not 0 < self.coverage < 1:
             raise ValueError("coverage doit être finie et appartenir à ]0, 1[")
+        if self.amp not in ("none", "bf16", "fp16"):
+            raise ValueError("amp doit être none, bf16 ou fp16")
         self.correction = torch.as_tensor(self.correction, dtype=torch.float64).detach().cpu()
         counts = torch.as_tensor(self.counts).detach().cpu()
         if (self.correction.ndim != 2 or not all(self.correction.shape)
@@ -96,12 +99,14 @@ class ForecastCalibration:
                 correction[horizon, feature] = values.kthvalue(rank).values
         return cls(quantiles, coverage, correction, counts, tuple(modalities), **provenance)
 
-    def validate(self, config, batch=None):
+    def validate(self, config, batch=None, *, amp=None):
         if (tuple(config.quantiles) != self.quantiles
                 or self.correction.shape != (config.forecast_horizon, config.series_features)):
             raise ValueError("Calibration incompatible avec la configuration du modèle")
         if batch is not None and modality_signature(batch) != self.modalities:
             raise ValueError("La calibration nécessite les mêmes modalités qu'à son ajustement")
+        if amp is not None and self.amp != amp:
+            raise ValueError("La calibration nécessite la même précision AMP qu'à son ajustement")
 
     def validate_checkpoint(self, checkpoint):
         if self.checkpoint_sha256 is None or file_sha256(checkpoint) != self.checkpoint_sha256:
@@ -125,7 +130,7 @@ class ForecastCalibration:
         return dict(format_version=1, quantiles=list(self.quantiles), coverage=self.coverage,
                     correction=self.correction.tolist(), counts=self.counts.tolist(),
                     modalities=list(self.modalities), checkpoint_sha256=self.checkpoint_sha256,
-                    dataset_sha256=self.dataset_sha256)
+                    dataset_sha256=self.dataset_sha256, amp=self.amp)
 
     @classmethod
     def from_dict(cls, data):
@@ -172,6 +177,6 @@ def fit_calibration(model, batches, *, coverage=None, amp="none", **provenance):
         if not scores:
             raise ValueError("Le jeu de calibration est vide")
         return ForecastCalibration.from_scores(torch.cat(scores), quantiles, signature,
-                                               coverage=coverage, **provenance)
+                                               coverage=coverage, amp=amp, **provenance)
     finally:
         model.train(was_training)

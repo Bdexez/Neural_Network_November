@@ -1,5 +1,5 @@
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import json
 import os
 from pathlib import Path
@@ -118,6 +118,7 @@ def main(argv=None):
     predict.add_argument("--output", help="Fichier JSONL de résultats ; sinon stdout")
     predict.add_argument("--max-new-tokens", type=int, default=0, help="Générer aussi du texte si un prompt est présent")
     predict.add_argument("--device", default="cpu")
+    predict.add_argument("--amp", choices=("none", "bf16", "fp16"), default="none")
     predict.add_argument("--calibration", help="Calibration JSON ajustée sur ce checkpoint et ces modalités")
     export = commands.add_parser("export", help="Exporter les poids sans l'optimiseur pour l'inférence")
     export.add_argument("--checkpoint", required=True)
@@ -199,11 +200,13 @@ def main(argv=None):
         calibration = ForecastCalibration.load(args.calibration) if args.calibration else None
         if calibration is not None:
             calibration.validate_checkpoint(args.checkpoint)
-            calibration.validate(model.config)
+            calibration.validate(model.config, amp=args.amp)
         model.eval()
         dataset = JointDataset(args.data, model.config)
         count = 0
-        with prediction_stream(args.output) as stream, torch.inference_mode():
+        autocast = nullcontext() if args.amp == "none" else torch.autocast(
+            torch.device(args.device).type, dtype=torch.bfloat16 if args.amp == "bf16" else torch.float16)
+        with prediction_stream(args.output) as stream, torch.inference_mode(), autocast:
             for index in range(len(dataset)):
                 batch = {key: value.to(args.device) for key, value in collate_records([dataset[index]]).items()
                          if key not in ("labels", "class_labels", "forecast_targets")}

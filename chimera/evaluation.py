@@ -10,7 +10,7 @@ def evaluate(model, batches, amp="none", *, calibration=None):
     if amp not in ("none", "bf16", "fp16"):
         raise ValueError("amp doit être none, bf16 ou fp16")
     if calibration is not None:
-        calibration.validate(model.config)
+        calibration.validate(model.config, amp=amp)
     was_training = model.training
     model.eval()
     device = next(model.parameters()).device

@@ -54,6 +54,7 @@ def main():
     parser.add_argument("--reference-checkpoint", required=True)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--control-checkpoint", help="Même budget de fine-tuning sans augmentation")
+    parser.add_argument("--candidate-name", default="augmented", help="Nom de la variante comparée")
     parser.add_argument("--batches", type=int, default=16)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--seed", type=int, default=9000000)
@@ -64,10 +65,12 @@ def main():
     args = parser.parse_args()
     if min(args.batches, args.batch_size, args.threads) < 1 or min(args.seed, args.mask_seed) < 0:
         parser.error("Tailles et threads > 0 ; seeds >= 0 requis")
+    if not args.candidate_name.strip() or args.candidate_name in ("source", "control"):
+        parser.error("Le nom de variante doit être non vide et distinct de source et control")
     checkpoints = dict(source=args.reference_checkpoint)
     if args.control_checkpoint:
         checkpoints["control"] = args.control_checkpoint
-    checkpoints["augmented"] = args.checkpoint
+    checkpoints[args.candidate_name] = args.checkpoint
     if any(Path(args.output).resolve() == Path(path).resolve() for path in checkpoints.values()):
         parser.error("La sortie doit être distincte des checkpoints")
     torch.set_num_threads(args.threads)

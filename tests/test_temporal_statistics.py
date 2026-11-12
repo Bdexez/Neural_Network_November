@@ -1,10 +1,18 @@
 from dataclasses import replace
+from contextlib import redirect_stderr, redirect_stdout
+import hashlib
+import io
+import json
+import tempfile
+from pathlib import Path
 import unittest
 
 import torch
 
 from chimera import Chimera, ChimeraConfig
 from chimera.data import synthetic_batch
+from chimera.cli import main
+from chimera.training import load_checkpoint, save_checkpoint
 
 
 class TemporalStatisticsTests(unittest.TestCase):
@@ -64,6 +72,80 @@ class TemporalStatisticsTests(unittest.TestCase):
         self.assertFalse(torch.allclose(tokens[0], tokens[1]))
         with self.assertRaises(ValueError):
             replace(model.config, temporal_statistics=1)
+
+    def test_checkpoint_transfer_is_explicit_zero_initialized_and_strict(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "source.pt"
+            original = Chimera(ChimeraConfig.preset("tiny")).eval()
+            save_checkpoint(path, original)
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            extended, payload = load_checkpoint(path, overrides={"temporal_statistics": True})
+            self.assertFalse(payload["config"]["temporal_statistics"])
+            self.assertTrue(extended.config.temporal_statistics)
+            self.assertIs(extended.embedding.weight, extended.lm_head.weight)
+            self.assertFalse(any(p.is_meta for p in extended.parameters()))
+            self.assertEqual(extended.temporal.statistics_proj.weight.count_nonzero().item(), 0)
+            batch = synthetic_batch(original.config, batch_size=2, seed=70)
+            with torch.no_grad():
+                torch.testing.assert_close(original(**batch).forecast, extended.eval()(**batch).forecast, rtol=0, atol=0)
+            self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), digest)
+            save_checkpoint(Path(directory) / "extended.pt", extended)
+            disabled, _ = load_checkpoint(Path(directory) / "extended.pt", overrides={"temporal_statistics": False})
+            self.assertIsNone(disabled.temporal.statistics_proj)
+            with self.assertRaises(RuntimeError):
+                load_checkpoint(path, overrides={"d_model": 128})
+            with self.assertRaises(ValueError):
+                load_checkpoint(path, overrides={"unknown": True})
+            # Un checkpoint déclaré compatible mais réellement incomplet ne reçoit
+            # pas d'initialisation de substitution silencieuse.
+            broken = dict(payload)
+            broken["model"] = dict(payload["model"])
+            del broken["model"]["classifier.weight"]
+            torch.save(broken, Path(directory) / "broken.pt")
+            with self.assertRaises(RuntimeError):
+                load_checkpoint(Path(directory) / "broken.pt", overrides={"temporal_statistics": True})
+
+    def test_override_finetuning_and_exact_resume_restore_the_extended_model(self):
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            root = Path(directory)
+            checkpoint, overrides = root / "source.pt", root / "overrides.json"
+            save_checkpoint(checkpoint, Chimera(replace(ChimeraConfig.preset("tiny"), dropout=0.1)))
+            overrides.write_text(json.dumps(dict(temporal_statistics=True)))
+            common = ["--threads", "2", "train", "--steps", "4", "--batch-size", "2", "--accumulation", "2",
+                      "--modality-policy", "balanced", "--series-crop-probability", "0.7", "--eval-every", "4"]
+            full, split = root / "full", root / "split"
+            transfer = ["--init-from", str(checkpoint), "--model-overrides", str(overrides)]
+            main(common + transfer + ["--output", str(full)])
+            main(common + transfer + ["--output", str(split), "--stop-after", "2"])
+            main(common + ["--resume", str(split / "latest.pt"), "--output", str(split)])
+            a, pa = load_checkpoint(full / "latest.pt")
+            b, pb = load_checkpoint(split / "latest.pt")
+            self.assertTrue(a.config.temporal_statistics)
+            self.assertGreater(a.temporal.statistics_proj.weight.abs().sum().item(), 0)
+            self.assertEqual(pb["trainer"]["initialization"]["overrides"], dict(temporal_statistics=True))
+            for name, tensor in a.state_dict().items():
+                torch.testing.assert_close(tensor, b.state_dict()[name], rtol=0, atol=0, msg=name)
+            with self.assertRaises(SystemExit):
+                main(common + ["--resume", str(split / "latest.pt"), "--model-overrides", str(overrides)])
+
+    def test_statistics_survive_cached_context_and_checkpointed_bf16_backward(self):
+        config = replace(ChimeraConfig.preset("tiny"), temporal_statistics=True, gradient_checkpointing=True)
+        model = Chimera(config).eval()
+        torch.nn.init.normal_(model.temporal.statistics_proj.weight, std=0.01)
+        batch = synthetic_batch(config, batch_size=2, seed=71)
+        ids = batch["input_ids"][:, :7]
+        context = {key: batch[key] for key in ("images", "series")}
+        with torch.no_grad():
+            full = model(ids, **context)
+            first = model(ids[:, :3], **context, use_cache=True)
+            second = model(ids[:, 3:], cache=first.cache, use_cache=True)
+        torch.testing.assert_close(full.logits[:, 3:], second.logits, rtol=2e-5, atol=2e-6)
+        torch.testing.assert_close(full.forecast, second.forecast, rtol=2e-5, atol=2e-6)
+        model.train()
+        with torch.autocast("cpu", dtype=torch.bfloat16):
+            loss = model(**batch).loss
+        loss.backward()
+        self.assertTrue(torch.isfinite(model.temporal.statistics_proj.weight.grad).all())
 
 
 if __name__ == "__main__":

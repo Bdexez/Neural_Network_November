@@ -50,13 +50,28 @@ def save_checkpoint(path, model, *, optimizer=None, scaler=None, step=0, trainer
         temporary.unlink(missing_ok=True)
 
 
-def load_checkpoint(path, device="cpu", *, mmap=True):
+def load_checkpoint(path, device="cpu", *, mmap=True, overrides=None):
     payload = torch.load(path, map_location="cpu", weights_only=True, mmap=mmap)
     if payload.get("format_version") != 1:
         raise ValueError("Version de checkpoint inconnue")
+    original_config = ChimeraConfig.from_dict(payload["config"])
+    if overrides is not None and not isinstance(overrides, dict):
+        raise ValueError("Les changements de configuration doivent être un objet JSON")
+    config = ChimeraConfig.from_dict(original_config.to_dict() | (overrides or {}))
     with torch.device("meta"):
-        model = Chimera(ChimeraConfig.from_dict(payload["config"]))
-    model.load_state_dict(payload["model"], strict=True, assign=True)
+        model = Chimera(config)
+    state = dict(payload["model"])
+    statistics_key = "temporal.statistics_proj.weight"
+    if config.temporal_statistics and not original_config.temporal_statistics:
+        if statistics_key in state:
+            raise ValueError("La projection statistique contredit la configuration du checkpoint")
+        # Ce seul nouveau paramètre est initialisé à zéro ; toute autre
+        # incompatibilité du checkpoint reste une erreur de chargement strict.
+        state[statistics_key] = torch.zeros(model.temporal.statistics_proj.weight.shape,
+                                            dtype=state["embedding.weight"].dtype, device="cpu")
+    elif original_config.temporal_statistics and not config.temporal_statistics:
+        state.pop(statistics_key)
+    model.load_state_dict(state, strict=True, assign=True)
     # assign remplace les Parameters ; rétablir explicitement le poids partagé.
     model.lm_head.weight = model.embedding.weight
     for module in model.modules():
@@ -124,7 +139,8 @@ def train(args, config):
     seed_everything(args.seed)
     initialization = None
     if args.resume or args.init_from:
-        model, source = load_checkpoint(args.resume or args.init_from, device)
+        overrides = json.loads(Path(args.model_overrides).read_text(encoding="utf-8")) if args.model_overrides else None
+        model, source = load_checkpoint(args.resume or args.init_from, device, overrides=overrides)
         config = model.config
         if args.resume:
             if "optimizer" not in source:
@@ -132,7 +148,7 @@ def train(args, config):
             payload, previous, start = source, source.get("trainer", {}), source["step"]
         else:
             initialization = dict(checkpoint=str(Path(args.init_from).resolve()), step=source["step"],
-                                  seed=source.get("trainer", {}).get("seed"))
+                                  seed=source.get("trainer", {}).get("seed"), overrides=overrides or {})
             payload, previous, start = {}, {}, 0
         del source
     else:
@@ -173,6 +189,8 @@ def train(args, config):
     if end_step < start or end_step < 1:
         raise ValueError("stop-after doit être >= à l'étape reprise et > 0")
     temporal_parameters = list(model.temporal.forecast_skip.parameters())
+    if model.temporal.statistics_proj is not None:
+        temporal_parameters.extend(model.temporal.statistics_proj.parameters())
     temporal_ids = {id(p) for p in temporal_parameters}
     optimizer = torch.optim.AdamW([
         {"params": [p for p in model.parameters() if id(p) not in temporal_ids], "lr_scale": 1.0},

@@ -104,6 +104,7 @@ def main(argv=None):
     initialization = training.add_mutually_exclusive_group()
     initialization.add_argument("--resume", help="Checkpoint complet dont reprendre l'entraînement")
     initialization.add_argument("--init-from", help="Poids initiaux pour un nouvel entraînement avec un optimiseur neuf")
+    training.add_argument("--model-overrides", help="Objet JSON partiel de configuration à appliquer avec --init-from")
     training.add_argument("--output", default="runs/chimera")
     training.add_argument("--save-every", type=int, default=25)
     training.add_argument("--log-every", type=int, default=10)
@@ -159,6 +160,8 @@ def main(argv=None):
             report = inspect_config(get_config(args))
         print(json.dumps(report, indent=2))
     elif args.command == "train":
+        if args.model_overrides and not args.init_from:
+            parser.error("model-overrides nécessite init-from ; utiliser config pour un nouveau modèle")
         train(args, get_config(args))
     elif args.command == "demo":
         torch.manual_seed(42)

@@ -9,6 +9,7 @@ import tempfile
 import torch
 from torch.utils.data import DataLoader
 
+from .calibration import ForecastCalibration, file_sha256, fit_calibration
 from .config import ChimeraConfig
 from .data import JointDataset, collate_records, synthetic_batch
 from .model import Chimera
@@ -117,6 +118,7 @@ def main(argv=None):
     predict.add_argument("--output", help="Fichier JSONL de résultats ; sinon stdout")
     predict.add_argument("--max-new-tokens", type=int, default=0, help="Générer aussi du texte si un prompt est présent")
     predict.add_argument("--device", default="cpu")
+    predict.add_argument("--calibration", help="Calibration JSON ajustée sur ce checkpoint et ces modalités")
     export = commands.add_parser("export", help="Exporter les poids sans l'optimiseur pour l'inférence")
     export.add_argument("--checkpoint", required=True)
     export.add_argument("--output", required=True)
@@ -127,6 +129,15 @@ def main(argv=None):
     evaluation.add_argument("--device", default="cpu")
     evaluation.add_argument("--amp", choices=("none", "bf16", "fp16"), default="none")
     evaluation.add_argument("--output")
+    evaluation.add_argument("--calibration", help="Mesurer aussi les intervalles calibrés")
+    calibrating = commands.add_parser("calibrate", help="Calibrer les intervalles sur un jeu séparé")
+    calibrating.add_argument("--checkpoint", required=True)
+    calibrating.add_argument("--data", required=True)
+    calibrating.add_argument("--output", required=True)
+    calibrating.add_argument("--batch-size", type=int, default=4)
+    calibrating.add_argument("--coverage", type=float, help="Couverture cible ; défaut : quantile max - min")
+    calibrating.add_argument("--device", default="cpu")
+    calibrating.add_argument("--amp", choices=("none", "bf16", "fp16"), default="none")
     args = parser.parse_args(argv)
     if args.threads < 1:
         parser.error("threads doit être > 0")
@@ -181,9 +192,14 @@ def main(argv=None):
     elif args.command == "predict":
         if args.max_new_tokens < 0:
             parser.error("max-new-tokens doit être >= 0")
-        if args.output and Path(args.output).resolve() == Path(args.data).resolve():
-            parser.error("Le fichier de prédictions doit être distinct du fichier d'entrée")
+        sources = (args.data, args.checkpoint, args.calibration)
+        if args.output and any(Path(args.output).resolve() == Path(path).resolve() for path in sources if path):
+            parser.error("Le fichier de prédictions doit être distinct des fichiers d'entrée")
         model, _ = load_checkpoint(args.checkpoint, args.device)
+        calibration = ForecastCalibration.load(args.calibration) if args.calibration else None
+        if calibration is not None:
+            calibration.validate_checkpoint(args.checkpoint)
+            calibration.validate(model.config)
         model.eval()
         dataset = JointDataset(args.data, model.config)
         count = 0
@@ -191,6 +207,8 @@ def main(argv=None):
             for index in range(len(dataset)):
                 batch = {key: value.to(args.device) for key, value in collate_records([dataset[index]]).items()
                          if key not in ("labels", "class_labels", "forecast_targets")}
+                if calibration is not None:
+                    calibration.validate(model.config, batch)
                 output = model(**batch)
                 row = {
                     "index": index,
@@ -199,6 +217,9 @@ def main(argv=None):
                     "quantiles": list(model.config.quantiles),
                     "forecast": output.forecast[0].tolist(),
                 }
+                if calibration is not None:
+                    row["calibrated_interval"] = calibration.interval(output.forecast)[0].tolist()
+                    row["calibrated_nominal_coverage"] = calibration.coverage
                 if args.max_new_tokens and "input_ids" in batch:
                     prompt = batch["input_ids"]
                     if prompt[0, -1] == ByteTokenizer.eos_id:
@@ -219,14 +240,34 @@ def main(argv=None):
         del payload
         save_checkpoint(args.output, model, step=step, trainer=trainer)
         print(f"Poids d'inférence écrits dans {args.output}")
-    elif args.command == "evaluate":
+    elif args.command in ("evaluate", "calibrate"):
         if args.batch_size < 1:
             parser.error("batch-size doit être > 0")
+        sources = [args.data, args.checkpoint]
+        if args.command == "evaluate" and args.calibration:
+            sources.append(args.calibration)
+        if args.output and any(Path(args.output).resolve() == Path(path).resolve() for path in sources):
+            parser.error("Le fichier de sortie doit être distinct des fichiers d'entrée")
         model, _ = load_checkpoint(args.checkpoint, args.device)
         dataset = JointDataset(args.data, model.config)
         loader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=collate_records,
                             generator=torch.Generator().manual_seed(0))
-        report = evaluate(model, loader, args.amp)
+        if args.command == "calibrate":
+            calibration = fit_calibration(model, loader, coverage=args.coverage, amp=args.amp,
+                                          checkpoint_sha256=file_sha256(args.checkpoint),
+                                          dataset_sha256=dataset.fingerprint)
+            content = json.dumps(calibration.to_dict(), indent=2, allow_nan=False) + "\n"
+            with prediction_stream(args.output) as stream:
+                stream.write(content)
+            print(json.dumps(dict(calibration=args.output, coverage=calibration.coverage,
+                                  examples=len(dataset), modalities=calibration.modalities)))
+            return
+        calibration = ForecastCalibration.load(args.calibration) if args.calibration else None
+        if calibration is not None:
+            calibration.validate_checkpoint(args.checkpoint)
+        report = evaluate(model, loader, args.amp, calibration=calibration)
+        if calibration is not None:
+            report["calibration_data_reused"] = dataset.fingerprint == calibration.dataset_sha256
         content = json.dumps(report, indent=2, allow_nan=False) + "\n"
         if args.output:
             path = Path(args.output)

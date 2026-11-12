@@ -9,6 +9,13 @@ from torch.utils.data import Dataset
 from .tokenizer import ByteTokenizer
 
 
+def evaluation_data_signature(config):
+    """Champs qui définissent les entrées et les cibles des comparaisons synthétiques."""
+    names = ("vocab_size", "max_seq_len", "image_size", "image_channels", "series_features",
+             "max_series_len", "num_classes", "forecast_horizon", "quantiles")
+    return {name: getattr(config, name) for name in names}
+
+
 def numeric_tensor(values):
     def convert(value):
         if value is None:

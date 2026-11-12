@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import torch
 
-from chimera.data import synthetic_batch
+from chimera.data import evaluation_data_signature, synthetic_batch
 from chimera.evaluation import evaluate
 from chimera.modalities import keep_modalities
 from chimera.training import load_checkpoint
@@ -74,10 +74,12 @@ def main():
     reference_config, reports, baselines = None, {}, {}
     for label, path in checkpoints.items():
         model, payload = load_checkpoint(path)
-        if reference_config is not None and model.config.to_dict() != reference_config:
-            raise ValueError("Les checkpoints doivent utiliser la même configuration")
-        reference_config = model.config.to_dict()
-        entry = dict(checkpoint=path, step=payload["step"], trainer=payload.get("trainer", {}), cases={})
+        signature = evaluation_data_signature(model.config)
+        if reference_config is not None and signature != reference_config:
+            raise ValueError("Les checkpoints doivent partager les mêmes entrées et cibles d'évaluation")
+        reference_config = signature
+        entry = dict(checkpoint=path, step=payload["step"], trainer=payload.get("trainer", {}),
+                     config=model.config.to_dict(), cases={})
         del payload
         for case in args.cases:
             entry["cases"][case] = {}

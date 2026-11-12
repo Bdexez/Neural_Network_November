@@ -16,7 +16,7 @@ import torch
 
 from chimera import Chimera, ChimeraConfig
 from chimera.cli import inspect_config
-from chimera.data import synthetic_batch
+from chimera.data import evaluation_data_signature, synthetic_batch
 from chimera.training import evaluate, load_checkpoint, seed_everything
 
 
@@ -71,9 +71,11 @@ def main():
     reference = {"seed": seed, "kind": "random_initialization"}
     if args.reference_checkpoint:
         initial, payload = load_checkpoint(args.reference_checkpoint)
-        if initial.config.to_dict() != config.to_dict():
-            raise ValueError("Le checkpoint de référence doit utiliser la même configuration")
+        if evaluation_data_signature(initial.config) != evaluation_data_signature(config):
+            raise ValueError("Le checkpoint de référence doit partager les mêmes entrées et cibles d'évaluation")
         reference = {"checkpoint": args.reference_checkpoint, "step": payload["step"], "kind": "checkpoint"}
+        reference["architecture"] = inspect_config(initial.config)
+        reference["config"] = initial.config.to_dict()
         del payload
     else:
         seed_everything(seed)

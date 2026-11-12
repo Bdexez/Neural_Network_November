@@ -10,7 +10,7 @@ import unittest
 import torch
 
 from chimera import Chimera, ChimeraConfig
-from chimera.data import synthetic_batch
+from chimera.data import evaluation_data_signature, synthetic_batch
 from chimera.cli import main
 from chimera.training import load_checkpoint, save_checkpoint
 
@@ -146,6 +146,15 @@ class TemporalStatisticsTests(unittest.TestCase):
             loss = model(**batch).loss
         loss.backward()
         self.assertTrue(torch.isfinite(model.temporal.statistics_proj.weight.grad).all())
+
+    def test_comparison_requires_identical_input_and_target_semantics(self):
+        original = ChimeraConfig.preset("tiny")
+        extended = replace(original, temporal_statistics=True, forecast_weight=3, n_layers=4)
+        self.assertEqual(evaluation_data_signature(original), evaluation_data_signature(extended))
+        for change in (dict(num_classes=8), dict(forecast_horizon=8), dict(image_size=64),
+                       dict(quantiles=(0.05, 0.5, 0.95)), dict(max_series_len=64)):
+            self.assertNotEqual(evaluation_data_signature(original),
+                                evaluation_data_signature(replace(original, **change)))
 
 
 if __name__ == "__main__":

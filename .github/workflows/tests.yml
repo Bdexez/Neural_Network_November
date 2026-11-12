@@ -36,3 +36,8 @@ jobs:
           torchrun --standalone --nproc-per-node=2 -m chimera --threads 1 train \
             --preset tiny --steps 3 --batch-size 2 --accumulation 2 \
             --eval-every 1 --output runs/ci-ddp
+      - name: Distributed fine-tuning with balanced modalities
+        run: |
+          torchrun --standalone --nproc-per-node=2 -m chimera --threads 1 train \
+            --init-from runs/ci-ddp/latest.pt --steps 7 --batch-size 2 --accumulation 2 \
+            --modality-policy balanced --eval-every 7 --output runs/ci-balanced

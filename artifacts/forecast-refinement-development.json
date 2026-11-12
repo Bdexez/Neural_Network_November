@@ -1,0 +1,57 @@
+{
+  "scope": "Development prototype; excluded from final evaluation. Preliminary coefficients were not retained for the final model.",
+  "source_checkpoint": "runs/workstation-statistics/model.pt",
+  "context": 8,
+  "ridge": 0.001,
+  "training_examples": 2048,
+  "training_batch_size": 64,
+  "training_seed_start": 4242,
+  "training_lengths": [
+    8,
+    12,
+    16,
+    24
+  ],
+  "missing_rate_on_alternate_batches": 0.2,
+  "evaluation_examples": 128,
+  "evaluation_batch_size": 32,
+  "evaluation_seed_start": 17000000,
+  "results": {
+    "complete": {
+      "before": 0.23894699745708042,
+      "adapted": 0.2389470028360342,
+      "persistence": 0.5509012540181478,
+      "direct_baseline": 0.4213968449168735
+    },
+    "history16": {
+      "before": 0.43984607193205094,
+      "adapted": 0.1598650419122435,
+      "persistence": 0.5509012540181478,
+      "direct_baseline": 0.5027747021781074
+    },
+    "history8": {
+      "before": 0.5876183907190958,
+      "adapted": 0.2082478420862067,
+      "persistence": 0.5509012540181478,
+      "direct_baseline": 0.6170606878068712
+    },
+    "missing30": {
+      "before": 0.3179428643650479,
+      "adapted": 0.31794287065642696,
+      "persistence": 0.5789701143900553,
+      "direct_baseline": 0.41342081626256305
+    },
+    "history16_missing30": {
+      "before": 0.5062474144829644,
+      "adapted": 0.2829823134050132,
+      "persistence": 0.5838574171066284,
+      "direct_baseline": 0.5576603147718642
+    },
+    "history8_missing30": {
+      "before": 0.6197091738382975,
+      "adapted": 0.39696199919675296,
+      "persistence": 0.5858864386876425,
+      "direct_baseline": 0.639935122595893
+    }
+  }
+}

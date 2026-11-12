@@ -1,0 +1,207 @@
+{
+  "tests": {
+    "tests_run": 83,
+    "seconds": 16.47,
+    "exit_code": 0,
+    "success": true,
+    "command": ".venv/bin/python -m unittest discover -s tests -v"
+  },
+  "integrity": {
+    "source_sha256": "f9051ef8eb69fa588993e1f6407a763d75aaa35af064f8219e6ca99f557dca33",
+    "refined_sha256": "330325b7a3d806e132159d297b3ed711b0056e626028a472051682e0a8b520f1",
+    "unchanged_base_tensors": 760,
+    "changed_base_tensors": [],
+    "added_tensors": [
+      "forecast_adapter.proj.bias",
+      "forecast_adapter.proj.weight"
+    ],
+    "added_parameters": 396,
+    "nonzero_adapter_coefficients": 384,
+    "source_step": 180,
+    "refined_parent_step": 180,
+    "optimizer_saved": false
+  },
+  "fit": {
+    "method": "ridge",
+    "ridge": 0.001,
+    "examples": 4096,
+    "active_examples": 3936,
+    "observed_targets_by_horizon": [
+      11808,
+      11808,
+      11808,
+      11808,
+      11808,
+      11808,
+      11808,
+      11808,
+      11808,
+      11808,
+      11808,
+      11808
+    ],
+    "context": 8,
+    "amp": "none",
+    "updated_parameters": 396,
+    "parent_checkpoint": "/home/bdex/delivery/Neural_Network_November/runs/workstation-statistics/model.pt",
+    "parent_sha256": "f9051ef8eb69fa588993e1f6407a763d75aaa35af064f8219e6ca99f557dca33",
+    "parent_step": 180,
+    "dataset_sha256": "5bd56862d1b8b65118eb27c8ba29c729fe4a60fe0f423fa2af6b6a59eb6aec81",
+    "data": "/home/bdex/delivery/Neural_Network_November/runs/forecast-refinement/train.jsonl",
+    "output": "/home/bdex/delivery/Neural_Network_November/runs/workstation-forecast-refined/model.pt",
+    "batch_size": 64,
+    "device": "cpu",
+    "torch_version": "2.15.0+cpu"
+  },
+  "parameters": 549495422,
+  "test_examples_per_case": 256,
+  "results": {
+    "complete": {
+      "series": {
+        "source_mae": 0.2298213161073161,
+        "refined_mae": 0.2298213161073161,
+        "improvement_fraction": 0.0
+      },
+      "all": {
+        "source_mae": 0.22002975229654315,
+        "refined_mae": 0.22002975229654315,
+        "improvement_fraction": 0.0
+      }
+    },
+    "history16": {
+      "series": {
+        "source_mae": 0.41769081406285596,
+        "refined_mae": 0.1372387259553357,
+        "improvement_fraction": 0.6714346561265687
+      },
+      "all": {
+        "source_mae": 0.3720084976513236,
+        "refined_mae": 0.14621846947930964,
+        "improvement_fraction": 0.6069485767060154
+      }
+    },
+    "history8": {
+      "series": {
+        "source_mae": 0.5436662732503869,
+        "refined_mae": 0.23804005801194864,
+        "improvement_fraction": 0.562157761619473
+      },
+      "all": {
+        "source_mae": 0.5082363484240583,
+        "refined_mae": 0.25197973131839213,
+        "improvement_fraction": 0.5042075756688161
+      }
+    },
+    "missing10": {
+      "series": {
+        "source_mae": 0.2488901507231276,
+        "refined_mae": 0.2488901507231276,
+        "improvement_fraction": 0.0
+      },
+      "all": {
+        "source_mae": 0.2455550986950483,
+        "refined_mae": 0.2455550986950483,
+        "improvement_fraction": 0.0
+      }
+    },
+    "missing30": {
+      "series": {
+        "source_mae": 0.31805694290313924,
+        "refined_mae": 0.31805694290313924,
+        "improvement_fraction": 0.0
+      },
+      "all": {
+        "source_mae": 0.3169726470118298,
+        "refined_mae": 0.3169726470118298,
+        "improvement_fraction": 0.0
+      }
+    },
+    "history16_missing30": {
+      "series": {
+        "source_mae": 0.47230830391173284,
+        "refined_mae": 0.2728572869000345,
+        "improvement_fraction": 0.42228988006311374
+      },
+      "all": {
+        "source_mae": 0.4363623511453625,
+        "refined_mae": 0.2599811102599132,
+        "improvement_fraction": 0.40420820087361886
+      }
+    },
+    "history8_missing30": {
+      "series": {
+        "source_mae": 0.568008283849243,
+        "refined_mae": 0.3643887214319774,
+        "improvement_fraction": 0.3584799169430932
+      },
+      "all": {
+        "source_mae": 0.5298336547675717,
+        "refined_mae": 0.35258883703722355,
+        "improvement_fraction": 0.33452917936687543
+      }
+    }
+  },
+  "persistence_forecast_mae": {
+    "complete": 0.5210459279527034,
+    "history16": 0.5210459279527034,
+    "history8": 0.5210459279527034,
+    "missing10": 0.5284157974674599,
+    "missing30": 0.5536508472351771,
+    "history16_missing30": 0.5536508472351771,
+    "history8_missing30": 0.5536508472351771
+  },
+  "complete_history_seven_modalities_identical": true,
+  "full_length_stress_cases_identical": true,
+  "maximum_classification_accuracy_difference": 0.0,
+  "maximum_text_loss_difference": 0.0,
+  "calibration_examples_per_case": 512,
+  "calibration_test_examples_per_case": 512,
+  "calibration": {
+    "history8": {
+      "series": {
+        "forecast_mae": 0.24196918425981392,
+        "forecast_interval_coverage": 0.5005425347222222,
+        "calibrated_interval_coverage": 0.8116319444444444,
+        "forecast_interval_width": 0.3599317259181084,
+        "calibrated_interval_width": 0.9224114024545997,
+        "forecast_interval_score": 1.6157719578154177,
+        "calibrated_interval_score": 1.1715393694903469
+      },
+      "text+image+series": {
+        "forecast_mae": 0.2617189275046157,
+        "forecast_interval_coverage": 0.4605577256944444,
+        "calibrated_interval_coverage": 0.8068576388888888,
+        "forecast_interval_width": 0.3253227640929658,
+        "calibrated_interval_width": 0.9353510384502847,
+        "forecast_interval_score": 1.8109668449590874,
+        "calibrated_interval_score": 1.2041916184817738
+      }
+    },
+    "history8_missing30": {
+      "series": {
+        "forecast_mae": 0.3710389040383638,
+        "forecast_interval_coverage": 0.3410373263888889,
+        "calibrated_interval_coverage": 0.8047960069444444,
+        "forecast_interval_width": 0.3400051525742229,
+        "calibrated_interval_width": 1.2697338943132006,
+        "forecast_interval_score": 2.752251290506845,
+        "calibrated_interval_score": 1.698648186766756
+      },
+      "text+image+series": {
+        "forecast_mae": 0.36143563535435735,
+        "forecast_interval_coverage": 0.3408203125,
+        "calibrated_interval_coverage": 0.8047960069444444,
+        "forecast_interval_width": 0.3087887274264681,
+        "calibrated_interval_width": 1.2412418818906492,
+        "forecast_interval_score": 2.776161589562738,
+        "calibrated_interval_score": 1.6718938117434543
+      }
+    }
+  },
+  "limitations": [
+    "Synthetic sinusoidal/trend data only; one refinement dataset realization.",
+    "No GPU execution; default architecture remains unchanged.",
+    "Uncalibrated interval coverage is low on short histories.",
+    "Calibration is separate for each history/missingness condition and modality set; marginal coverage only."
+  ]
+}

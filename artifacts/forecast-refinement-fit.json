@@ -1,0 +1,92 @@
+{
+  "data": {
+    "settings": {
+      "checkpoint": "runs/workstation-statistics/model.pt",
+      "output": "runs/forecast-refinement/train.jsonl",
+      "examples": 4096,
+      "batch_size": 64,
+      "seed": 50000,
+      "augmentation_seed": 1050000,
+      "min_history": 8,
+      "missing_rate": 0.2,
+      "mask_probability": 0.5
+    },
+    "dataset_sha256": "5bd56862d1b8b65118eb27c8ba29c729fe4a60fe0f423fa2af6b6a59eb6aec81",
+    "lengths": {
+      "8": 170,
+      "9": 143,
+      "10": 173,
+      "11": 169,
+      "12": 163,
+      "13": 160,
+      "14": 160,
+      "15": 166,
+      "16": 151,
+      "17": 158,
+      "18": 168,
+      "19": 162,
+      "20": 173,
+      "21": 190,
+      "22": 161,
+      "23": 176,
+      "24": 181,
+      "25": 160,
+      "26": 163,
+      "27": 152,
+      "28": 181,
+      "29": 153,
+      "30": 157,
+      "31": 146,
+      "32": 160
+    },
+    "missing_values": 23740,
+    "values": 245379
+  },
+  "fit": {
+    "method": "ridge",
+    "ridge": 0.001,
+    "examples": 4096,
+    "active_examples": 3936,
+    "observed_targets_by_horizon": [
+      11808,
+      11808,
+      11808,
+      11808,
+      11808,
+      11808,
+      11808,
+      11808,
+      11808,
+      11808,
+      11808,
+      11808
+    ],
+    "context": 8,
+    "amp": "none",
+    "updated_parameters": 396,
+    "parent_checkpoint": "/home/bdex/delivery/Neural_Network_November/runs/workstation-statistics/model.pt",
+    "parent_sha256": "f9051ef8eb69fa588993e1f6407a763d75aaa35af064f8219e6ca99f557dca33",
+    "parent_step": 180,
+    "dataset_sha256": "5bd56862d1b8b65118eb27c8ba29c729fe4a60fe0f423fa2af6b6a59eb6aec81",
+    "data": "/home/bdex/delivery/Neural_Network_November/runs/forecast-refinement/train.jsonl",
+    "output": "/home/bdex/delivery/Neural_Network_November/runs/workstation-forecast-refined/model.pt",
+    "batch_size": 64,
+    "device": "cpu",
+    "torch_version": "2.15.0+cpu"
+  },
+  "integrity": {
+    "source_sha256": "f9051ef8eb69fa588993e1f6407a763d75aaa35af064f8219e6ca99f557dca33",
+    "refined_sha256": "330325b7a3d806e132159d297b3ed711b0056e626028a472051682e0a8b520f1",
+    "unchanged_base_tensors": 760,
+    "changed_base_tensors": [],
+    "added_tensors": [
+      "forecast_adapter.proj.bias",
+      "forecast_adapter.proj.weight"
+    ],
+    "added_parameters": 396,
+    "nonzero_adapter_coefficients": 384,
+    "source_step": 180,
+    "refined_parent_step": 180,
+    "optimizer_saved": false
+  }
+}

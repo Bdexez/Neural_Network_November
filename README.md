@@ -18,6 +18,8 @@ Les [historiques courts et observations manquantes](ROBUSTNESS.md) couvrent l'au
 
 Les [statistiques temporelles](TEMPORAL_STATISTICS.md) ajoutent une projection optionnelle du niveau, de l'échelle et de la durée observée, ainsi qu'un transfert explicite vers des configurations compatibles.
 
+La [correction des prévisions courtes](FORECAST_REFINEMENT.md) ajuste une couche de 396 paramètres à partir des derniers pas de l'historique, en conservant les poids du modèle de base.
+
 ## Démarrage
 
 Python 3.11 ou plus récent. Dans cet espace de travail, `.venv` contient déjà PyTorch CPU.

@@ -3,10 +3,28 @@ import unittest
 
 import torch
 
+from chimera import Chimera, ChimeraConfig
 from chimera.augmentation import SeriesAugmentation
+from chimera.data import synthetic_batch
 
 
 class AugmentationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        torch.set_num_threads(2)
+
+    def test_masked_training_crop_matches_a_physically_shorter_inference_history(self):
+        model = Chimera(ChimeraConfig.preset("tiny")).eval()
+        batch = synthetic_batch(model.config, batch_size=2, seed=33)
+        cropped = SeriesAugmentation(crop_probability=1, min_history=8)(batch, index=2, seed=7)
+        with torch.inference_mode():
+            for row in range(2):
+                valid = cropped["series_mask"][row]
+                padded = model(series=cropped["series"][row:row+1], series_mask=valid[None])
+                shorter = model(series=batch["series"][row, valid][None])
+                torch.testing.assert_close(padded.forecast, shorter.forecast, rtol=2e-5, atol=2e-6)
+                torch.testing.assert_close(padded.classification_logits, shorter.classification_logits, rtol=2e-5, atol=2e-6)
+
     def test_crop_preserves_recent_valid_positions_targets_and_original_inputs(self):
         series = torch.arange(5 * 12 * 2).float().reshape(5, 12, 2)
         valid = torch.ones(5, 12, dtype=torch.bool)

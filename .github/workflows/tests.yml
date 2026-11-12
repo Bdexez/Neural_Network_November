@@ -40,4 +40,5 @@ jobs:
         run: |
           torchrun --standalone --nproc-per-node=2 -m chimera --threads 1 train \
             --init-from runs/ci-ddp/latest.pt --steps 7 --batch-size 2 --accumulation 2 \
-            --modality-policy balanced --eval-every 7 --output runs/ci-balanced
+            --modality-policy balanced --series-crop-probability 0.5 --series-missing-rate 0.2 \
+            --eval-every 7 --output runs/ci-balanced

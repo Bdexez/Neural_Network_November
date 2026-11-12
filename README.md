@@ -10,6 +10,8 @@ Les checkpoints sous `runs/` sont disponibles dans l'espace de travail local et 
 
 Les [améliorations mesurées](IMPROVEMENTS.md) décrivent le cache borné, le chargement des poids à la demande, le lecteur JSONL indexé et le suivi de validation.
 
+Le [suivi de l'apprentissage](LEARNING.md) présente le fine-tuning du modèle existant, la comparaison des politiques de modalités et leurs compromis mesurés.
+
 ## Démarrage
 
 Python 3.11 ou plus récent. Dans cet espace de travail, `.venv` contient déjà PyTorch CPU.
@@ -131,6 +133,10 @@ Les fichiers de [configuration](configs/) permettent de modifier dimensions, pro
 
 La perte totale combine les pertes de texte, classification et prévision, la prédiction auxiliaire de tokens, l'alignement et la régularisation des experts. Les poids sont configurables. La projection temporelle directe part de la dernière observation disponible par variable et apprend une correction, avec un taux d'apprentissage dix fois supérieur au réseau principal. `--modality-dropout` omet des entrées pour apprendre aussi avec des modalités absentes. La perte totale des logs peut alors porter sur des ensembles de tâches différents d'une étape à l'autre ; comparer les mesures de validation à modalités fixes.
 
+`--modality-policy balanced` parcourt une fois chaque combinaison disponible par cycle mélangé : sept combinaisons si les trois entrées sont présentes. Le choix reste reproductible après une reprise et réparti entre les rangs DDP. Les sous-ensembles sans cible supervisée sont exclus. Cette option remplace le tirage par `--modality-dropout` ; la politique par défaut reste `dropout`. `metrics.jsonl` compte les micro-lots par combinaison sur le rang 0. L'équilibrage change les compromis entre tâches : consulter les mesures avant de le choisir.
+
+Dans une configuration JSON, `alignment_mode: "class"` fait des exemples de même classe des positifs supplémentaires pour l'alignement. Les classes ignorées (`-100`) restent appariées individuellement ; sans classes, l'objectif habituel est conservé. Choisir cette option lorsque les classes définissent les groupes sémantiques à rapprocher. `alignment_mode: "paired"` et `alignment_temperature: 0.1` conservent les réglages précédents.
+
 Le trainer propose AdamW, échauffement et décroissance cosinus du taux d'apprentissage, accumulation des gradients, écrêtage, AMP BF16/FP16 et recalcul d'activations. Il écrit `config.json`, `metrics.jsonl`, `validation.jsonl`, `evaluation.json`, `latest.pt` et `best.pt`. Les logs contiennent l'utilisation de chaque expert et les mises à jour ignorées par GradScaler en cas d'overflow. Les sauvegardes sont remplacées atomiquement et incluent le modèle, AdamW, le scaler, les RNG, le planning et l'état de validation.
 
 `--eval-every` règle la fréquence de validation, et `best.pt` conserve toujours la plus petite perte de validation observée. `--patience` active l'arrêt après un nombre de validations sans progrès significatif ; `--min-delta` définit ce progrès. L'arrêt anticipé nécessite `--val-data`. Sans fichier de validation, les mesures portent sur un lot synthétique fixe et l'arrêt anticipé reste désactivé par défaut. Les décisions d'arrêt sont partagées entre les processus DDP.
@@ -147,6 +153,16 @@ Reprise exacte sur un processus, en conservant les mêmes arguments de planning 
 ```
 
 La suite de tests compare les poids d'une exécution continue et d'une reprise avec dropout, accumulation, mélange des données et arrêt anticipé : ils doivent être identiques bit à bit. Les empreintes SHA-256 des JSONL d'entraînement et de validation sont conservées dans les nouveaux checkpoints et vérifiées à la reprise. Les fichiers d'images externes référencés par `image_path` doivent également rester identiques ; leur contenu n'entre pas dans l'empreinte du JSONL.
+
+Pour adapter des poids existants avec un nouvel optimiseur, un nouveau planning et de nouvelles données :
+
+```bash
+.venv/bin/python -m chimera train --init-from runs/custom/model.pt \
+  --data adaptation/train.jsonl --val-data adaptation/validation.jsonl \
+  --steps 100 --lr 0.0001 --output runs/adaptation
+```
+
+`--init-from` accepte un checkpoint complet ou un export d'inférence et utilise sa configuration. L'étape repart de zéro et la provenance est enregistrée. `--resume` conserve l'état d'un entraînement interrompu ; les deux options sont exclusives.
 
 Entraînement distribué DDP :
 

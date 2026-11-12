@@ -35,6 +35,7 @@ class ChimeraConfig:
     num_classes: int = 6
     forecast_horizon: int = 12
     forecast_context: int = 32
+    forecast_adapter_context: int = 0
     quantiles: tuple[float, ...] = (0.1, 0.5, 0.9)
     prediction_steps: int = 2
     balance_weight: float = 0.01
@@ -71,6 +72,9 @@ class ChimeraConfig:
             raise ValueError("top_k ne peut pas dépasser n_experts")
         if self.image_size % self.patch_size:
             raise ValueError("image_size doit être divisible par patch_size")
+        if (type(self.forecast_adapter_context) is not int
+                or not 0 <= self.forecast_adapter_context <= self.forecast_context):
+            raise ValueError("forecast_adapter_context doit être un entier entre 0 et forecast_context")
         if not 0 <= self.dropout < 1:
             raise ValueError("dropout doit appartenir à [0, 1[")
         if not math.isfinite(self.rope_theta) or self.rope_theta <= 1:

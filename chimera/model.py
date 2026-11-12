@@ -8,6 +8,7 @@ from torch.utils.checkpoint import checkpoint
 
 from .config import ChimeraConfig
 from .losses import symmetric_contrastive_loss
+from .forecast_adapter import ForecastAdapter, ForecastAdapterContext
 from .modules import (
     DecoderBlock, LayerCache, LatentResampler, QuantileForecastHead,
     RMSNorm, TemporalEncoder, VisionEncoder,
@@ -22,6 +23,7 @@ class ModelCache:
     series_mean: torch.Tensor | None = None
     series_scale: torch.Tensor | None = None
     forecast_baseline: torch.Tensor | None = None
+    forecast_adapter_context: ForecastAdapterContext | None = None
 
 
 @dataclass
@@ -67,10 +69,14 @@ class Chimera(nn.Module):
         self.classifier = nn.Linear(d, config.num_classes)
         self.forecaster = QuantileForecastHead(config)
         self.alignment = nn.ModuleList([nn.Linear(d, d, bias=False) for _ in range(3)])
+        self.forecast_adapter = ForecastAdapter(config) if config.forecast_adapter_context else None
         self.apply(self._initialize)
         nn.init.zeros_(self.temporal.forecast_skip.weight)
         if self.temporal.statistics_proj is not None:
             nn.init.zeros_(self.temporal.statistics_proj.weight)
+        if self.forecast_adapter is not None:
+            nn.init.zeros_(self.forecast_adapter.proj.weight)
+            nn.init.zeros_(self.forecast_adapter.proj.bias)
         for parameter in (self.modality, self.task_queries, self.resampler.latents,
                           self.resampler.null_context, self.vision.position):
             nn.init.normal_(parameter, std=0.02)
@@ -173,6 +179,7 @@ class Chimera(nn.Module):
 
         contexts, masks, align_vectors = [], [], []
         mean = scale = baseline = None
+        adapter_context = None
         if cache is None:
             if images is not None:
                 image_tokens, image_valid = self.vision(images)
@@ -183,6 +190,8 @@ class Chimera(nn.Module):
                 series_mask = (torch.ones(series.shape[:2], device=series.device, dtype=torch.bool)
                                if series_mask is None else series_mask.bool())
                 series_tokens, temporal_valid, mean, scale, baseline = self.temporal(series, series_mask)
+                if self.forecast_adapter is not None:
+                    adapter_context = self.forecast_adapter.prepare(series, temporal_valid, mean, scale)
                 contexts.append(series_tokens + self.modality[1])
                 masks.append(temporal_valid)
                 pooled_series = (series_tokens * temporal_valid.unsqueeze(-1)).sum(1)
@@ -192,6 +201,7 @@ class Chimera(nn.Module):
         else:
             latents, mean, scale = cache.latents, cache.series_mean, cache.series_scale
             baseline = cache.forecast_baseline
+            adapter_context = cache.forecast_adapter_context
 
         if input_ids is None:
             x = self.task_queries.expand(batch, -1, -1)
@@ -234,6 +244,8 @@ class Chimera(nn.Module):
         forecast_pooled = self.fusion(torch.cat((forecast_pooled, memory_pooled), -1))
         class_logits = self.classifier(class_pooled)
         forecast = self.forecaster(forecast_pooled, mean, scale, baseline)
+        if self.forecast_adapter is not None and adapter_context is not None:
+            forecast = self.forecast_adapter(forecast, adapter_context)
 
         losses = {
             "balance": torch.stack(balance_losses).mean(),
@@ -281,7 +293,7 @@ class Chimera(nn.Module):
                     ))
             losses["alignment"] = torch.stack(contrastive).mean()
             total = total + c.alignment_weight * losses["alignment"]
-        next_cache = (ModelCache(next_layers, latents, offset + hidden.size(1), mean, scale, baseline)
+        next_cache = (ModelCache(next_layers, latents, offset + hidden.size(1), mean, scale, baseline, adapter_context)
                       if use_cache else None)
         return ChimeraOutput(logits, class_logits, forecast, total if supervised else None,
                              losses, torch.stack(usage), next_cache)

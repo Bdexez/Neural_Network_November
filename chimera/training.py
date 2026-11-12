@@ -71,6 +71,18 @@ def load_checkpoint(path, device="cpu", *, mmap=True, overrides=None):
                                             dtype=state["embedding.weight"].dtype, device="cpu")
     elif original_config.temporal_statistics and not config.temporal_statistics:
         state.pop(statistics_key)
+    adapter_keys = ("forecast_adapter.proj.weight", "forecast_adapter.proj.bias")
+    if config.forecast_adapter_context != original_config.forecast_adapter_context:
+        if original_config.forecast_adapter_context:
+            for key in adapter_keys:
+                state.pop(key)  # Refuser aussi un ancien adaptateur incomplet.
+        elif any(key in state for key in adapter_keys):
+            raise ValueError("L'adaptateur contredit la configuration du checkpoint")
+        if config.forecast_adapter_context:
+            expected = model.forecast_adapter.state_dict()
+            for key in adapter_keys:
+                relative = key.removeprefix("forecast_adapter.")
+                state[key] = torch.zeros(expected[relative].shape, dtype=state["embedding.weight"].dtype, device="cpu")
     model.load_state_dict(state, strict=True, assign=True)
     # assign remplace les Parameters ; rétablir explicitement le poids partagé.
     model.lm_head.weight = model.embedding.weight

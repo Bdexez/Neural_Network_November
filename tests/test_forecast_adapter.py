@@ -1,16 +1,23 @@
 from dataclasses import replace
+import tempfile
+from pathlib import Path
 import unittest
 
 import torch
 
 from chimera import Chimera, ChimeraConfig
 from chimera.data import synthetic_batch
+from chimera.forecast_adapter import fit_forecast_adapter
+from chimera.training import load_checkpoint, save_checkpoint
 
 
 class ForecastAdapterTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         torch.set_num_threads(2)
+
+    def setUp(self):
+        torch.manual_seed(39)
 
     def test_zero_initialization_preserves_outputs_and_active_head_only_changes_short_forecasts(self):
         config = ChimeraConfig.preset("tiny")
@@ -70,3 +77,64 @@ class ForecastAdapterTests(unittest.TestCase):
         self.assertIsNotNone(first.cache.forecast_adapter_context)
         torch.testing.assert_close(full.forecast, second.forecast, rtol=2e-5, atol=2e-6)
         torch.testing.assert_close(full.logits[:, 4:], second.logits, rtol=2e-5, atol=2e-6)
+
+    def test_ridge_fit_improves_held_out_forecasts_changes_only_adapter_and_is_idempotent(self):
+        config = replace(ChimeraConfig.preset("tiny"), forecast_adapter_context=8, dropout=0.1)
+        model = Chimera(config)
+        training = synthetic_batch(config, batch_size=128, seed=6001)
+        validation = synthetic_batch(config, batch_size=64, seed=6002)
+        for batch in (training, validation):
+            batch["series"] = batch["series"][:, -8:]
+            batch["series_mask"] = batch["series_mask"][:, -8:]
+        training["forecast_targets"][:10, 2, 1] = float("nan")
+        state = {name: value.clone() for name, value in model.state_dict().items()}
+        with torch.inference_mode():
+            before = model.eval()(series=validation["series"])
+        model.train()
+        rng = torch.get_rng_state().clone()
+        report = fit_forecast_adapter(model, [training])
+        self.assertTrue(model.training)
+        torch.testing.assert_close(torch.get_rng_state(), rng, rtol=0, atol=0)
+        self.assertEqual(report["active_examples"], 128)
+        self.assertEqual(report["observed_targets_by_horizon"][2], 374)
+        self.assertEqual(report["updated_parameters"], 396)
+        for name, value in model.state_dict().items():
+            if not name.startswith("forecast_adapter."):
+                torch.testing.assert_close(value, state[name], rtol=0, atol=0, msg=name)
+        with torch.inference_mode():
+            after = model.eval()(series=validation["series"])
+        target = validation["forecast_targets"]
+        before_mae = (before.forecast[..., 1] - target).abs().mean()
+        after_mae = (after.forecast[..., 1] - target).abs().mean()
+        self.assertLess(after_mae.item(), before_mae.item() * 0.7)
+        torch.testing.assert_close(before.classification_logits, after.classification_logits, rtol=0, atol=0)
+        fitted = {name: value.clone() for name, value in model.forecast_adapter.state_dict().items()}
+        fit_forecast_adapter(model, [training])
+        for name, value in model.forecast_adapter.state_dict().items():
+            torch.testing.assert_close(value, fitted[name], rtol=0, atol=0)
+        with self.assertRaisesRegex(ValueError, "plus court"):
+            fit_forecast_adapter(model, [synthetic_batch(config, batch_size=2)])
+        for name, value in model.forecast_adapter.state_dict().items():
+            torch.testing.assert_close(value, fitted[name], rtol=0, atol=0)
+        self.assertFalse(model.forecast_adapter._forward_pre_hooks)
+
+    def test_transfer_materializes_only_new_adapter_parameters_and_supports_bf16(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "base.pt"
+            original = Chimera(ChimeraConfig.preset("tiny"))
+            save_checkpoint(path, original)
+            loaded, _ = load_checkpoint(path, overrides={"forecast_adapter_context": 8})
+            self.assertFalse(any(p.is_meta for p in loaded.parameters()))
+            self.assertEqual(loaded.forecast_adapter.proj.weight.count_nonzero().item(), 0)
+            batch = synthetic_batch(loaded.config, batch_size=16, seed=6003)
+            batch["series"], batch["series_mask"] = batch["series"][:, -8:], batch["series_mask"][:, -8:]
+            fit_forecast_adapter(loaded, [batch], amp="bf16")
+            with torch.inference_mode(), torch.autocast("cpu", dtype=torch.bfloat16):
+                forecast = loaded.eval()(series=batch["series"]).forecast
+            self.assertTrue(torch.isfinite(forecast).all())
+            self.assertTrue((forecast[..., 1:] >= forecast[..., :-1]).all())
+            save_checkpoint(Path(directory) / "fitted.pt", loaded)
+            restored, _ = load_checkpoint(Path(directory) / "fitted.pt")
+            torch.testing.assert_close(restored.forecast_adapter.proj.weight, loaded.forecast_adapter.proj.weight)
+            replaced, _ = load_checkpoint(Path(directory) / "fitted.pt", overrides={"forecast_adapter_context": 4})
+            self.assertEqual(replaced.forecast_adapter.proj.weight.count_nonzero().item(), 0)

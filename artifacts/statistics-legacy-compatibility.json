@@ -1,0 +1,7 @@
+{
+  "reference": "artifacts/robustness-control-clean-benchmark.json",
+  "compared_modalities": 7,
+  "examples": 64,
+  "maximum_quality_difference": 0.0,
+  "old_checkpoint_parameters": 549485298
+}

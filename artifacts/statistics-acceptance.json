@@ -1,0 +1,205 @@
+{
+  "tests": {
+    "tests_run": 75,
+    "seconds": 19.292,
+    "wall_seconds": 21.243072627999936,
+    "exit_code": 0,
+    "success": true,
+    "command": ".venv/bin/python -m unittest discover -s tests -v"
+  },
+  "legacy_compatibility": {
+    "reference": "artifacts/robustness-control-clean-benchmark.json",
+    "compared_modalities": 7,
+    "examples": 64,
+    "maximum_quality_difference": 0.0,
+    "old_checkpoint_parameters": 549485298
+  },
+  "source_checkpoint": {
+    "checkpoint": "runs/workstation-robust/model.pt",
+    "sha256": "1234da00e1506ae86b67b40788c1286782c976ce2b022060779fd766504191ea"
+  },
+  "steps_per_branch": 180,
+  "training_seed": 2718,
+  "test_examples_per_case": 256,
+  "results": {
+    "complete": {
+      "series": {
+        "control_mae": 0.22783812294599354,
+        "statistics_mae": 0.22962686984252892,
+        "control_accuracy": 0.75390625,
+        "statistics_accuracy": 0.76953125
+      },
+      "all": {
+        "control_mae": 0.21915097712917486,
+        "statistics_mae": 0.2269656261768331,
+        "control_accuracy": 1.0,
+        "statistics_accuracy": 1.0
+      }
+    },
+    "history16": {
+      "series": {
+        "control_mae": 0.4475827957569436,
+        "statistics_mae": 0.42562167244604,
+        "control_accuracy": 0.45703125,
+        "statistics_accuracy": 0.62890625
+      },
+      "all": {
+        "control_mae": 0.37288850656477734,
+        "statistics_mae": 0.37921687873717425,
+        "control_accuracy": 1.0,
+        "statistics_accuracy": 1.0
+      }
+    },
+    "history8": {
+      "series": {
+        "control_mae": 0.5581026139568874,
+        "statistics_mae": 0.5504843744759759,
+        "control_accuracy": 0.43359375,
+        "statistics_accuracy": 0.58203125
+      },
+      "all": {
+        "control_mae": 0.5143406334027532,
+        "statistics_mae": 0.5132701570716259,
+        "control_accuracy": 1.0,
+        "statistics_accuracy": 1.0
+      }
+    },
+    "missing10": {
+      "series": {
+        "control_mae": 0.24596554365507473,
+        "statistics_mae": 0.24754583372244574,
+        "control_accuracy": 0.703125,
+        "statistics_accuracy": 0.75
+      },
+      "all": {
+        "control_mae": 0.24282065126575011,
+        "statistics_mae": 0.24976501140695795,
+        "control_accuracy": 1.0,
+        "statistics_accuracy": 1.0
+      }
+    },
+    "missing30": {
+      "series": {
+        "control_mae": 0.3157795549549418,
+        "statistics_mae": 0.3169753745570334,
+        "control_accuracy": 0.6484375,
+        "statistics_accuracy": 0.703125
+      },
+      "all": {
+        "control_mae": 0.30596017447437085,
+        "statistics_mae": 0.31323838669762455,
+        "control_accuracy": 1.0,
+        "statistics_accuracy": 1.0
+      }
+    },
+    "history16_missing30": {
+      "series": {
+        "control_mae": 0.49684280598578173,
+        "statistics_mae": 0.47904305965433497,
+        "control_accuracy": 0.453125,
+        "statistics_accuracy": 0.59765625
+      },
+      "all": {
+        "control_mae": 0.4479119969902159,
+        "statistics_mae": 0.4414097411990194,
+        "control_accuracy": 1.0,
+        "statistics_accuracy": 1.0
+      }
+    },
+    "history8_missing30": {
+      "series": {
+        "control_mae": 0.5728200387974438,
+        "statistics_mae": 0.5729247372550567,
+        "control_accuracy": 0.421875,
+        "statistics_accuracy": 0.47265625
+      },
+      "all": {
+        "control_mae": 0.5338656790700043,
+        "statistics_mae": 0.531574595479065,
+        "control_accuracy": 1.0,
+        "statistics_accuracy": 1.0
+      }
+    }
+  },
+  "persistence_forecast_mae": {
+    "complete": 0.5157266587056155,
+    "history16": 0.5157266587056155,
+    "history8": 0.5157266587056155,
+    "missing10": 0.5241410299083024,
+    "missing30": 0.5465814458673575,
+    "history16_missing30": 0.5465814458673575,
+    "history8_missing30": 0.5465814458673575
+  },
+  "distributed_smoke_test": {
+    "world_size": 2,
+    "accumulation": 2,
+    "evaluation": {
+      "loss": 7.443584442138672,
+      "balance": 1.007692575454712,
+      "router_z": 1.9973150491714478,
+      "text": 4.8806610107421875,
+      "multi_token": 5.537190914154053,
+      "classification": 1.7661802768707275,
+      "forecast": 0.19193363189697266,
+      "alignment": 0.7803189754486084,
+      "text_tokens": 40,
+      "byte_perplexity": 131.7177019320326,
+      "classified_examples": 2,
+      "accuracy": 0.5,
+      "forecast_observations": 72,
+      "forecast_mae": 0.5604635961353779,
+      "forecast_rmse": 0.6922706998970518,
+      "forecast_mae_by_horizon": [
+        0.0719894419113795,
+        0.09566880265871684,
+        0.19229931632677713,
+        0.26773035029570263,
+        0.3756295343240102,
+        0.4866165320078532,
+        0.598509669303894,
+        0.71141250928243,
+        0.8380950142939886,
+        0.9268527726332346,
+        1.0364242096741993,
+        1.1243350009123485
+      ],
+      "forecast_interval_coverage": 0.5,
+      "forecast_interval_width": 1.0903833301530943,
+      "forecast_nominal_coverage": 0.8,
+      "forecast_interval_score": 2.955690646337138,
+      "forecast_interval_coverage_by_horizon": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        0.6666666666666666,
+        0.5,
+        0.3333333333333333,
+        0.3333333333333333,
+        0.16666666666666666,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "forecast_interval_width_by_horizon": [
+        1.086995820204417,
+        1.0859334270159404,
+        1.0884116192658742,
+        1.0896333654721577,
+        1.0970708131790161,
+        1.0929585099220276,
+        1.0805787245432537,
+        1.0841051042079926,
+        1.0925570925076802,
+        1.0922107299168904,
+        1.0961441894372304,
+        1.0980005661646526
+      ],
+      "step": 7,
+      "best_step": 7,
+      "stopped_early": false
+    }
+  },
+  "scope": "One paired training seed, synthetic held-out examples only; improved classification with mixed forecasting outcomes.",
+  "source_checkpoint_digest_matches_recorded_value": true
+}

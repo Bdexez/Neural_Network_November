@@ -104,6 +104,26 @@ class CalibrationTests(unittest.TestCase):
         self.assertAlmostEqual(report["calibrated_interval_score"], 4)
         self.assertEqual(report["calibrated_interval_coverage"], 1)
 
+    def test_forecast_metrics_do_not_overflow_half_precision_subtraction(self):
+        class FixedForecast(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.anchor = torch.nn.Parameter(torch.zeros(()))
+                self.config = replace(ChimeraConfig.preset("tiny"), forecast_horizon=1, series_features=1)
+
+            def forward(self, series, **kwargs):
+                forecast = series.new_tensor([-60000, 60000, 60000]).expand(series.size(0), 1, 1, 3)
+                return SimpleNamespace(forecast=forecast, loss=None, losses={"forecast": self.anchor * 0})
+
+        fitted = ForecastCalibration((0.1, 0.5, 0.9), 0.8, [[0.]], [[20]], ("series",))
+        batch = dict(series=torch.ones(1, 1, 1, dtype=torch.float16),
+                     forecast_targets=torch.tensor([[[-60000]]], dtype=torch.float16))
+        report = evaluate(FixedForecast(), [batch], calibration=fitted)
+        for metric in ("forecast_mae", "forecast_rmse", "forecast_interval_width", "forecast_interval_score",
+                       "calibrated_interval_width", "calibrated_interval_score"):
+            self.assertEqual(report[metric], 120000, metric)
+        self.assertEqual(report["forecast_interval_coverage"], 1)
+
     def test_exact_finite_sample_rank_instead_of_interpolation_or_clipping(self):
         scores = torch.arange(9, dtype=torch.float64)[:, None, None]
         fitted = ForecastCalibration.from_scores(scores, (0.1, 0.5, 0.9), ("series",))

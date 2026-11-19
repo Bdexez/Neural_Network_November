@@ -67,14 +67,15 @@ def evaluate(model, batches, amp="none", *, calibration=None):
                     observed = torch.isfinite(target)
                     weights["forecast"] = observed.sum().item()
                     forecast_count += weights["forecast"]
-                    median = output.forecast[..., model.config.quantiles.index(0.5)]
-                    error = torch.where(observed, median - target, 0).double()
+                    target = target.double()
+                    median = output.forecast[..., model.config.quantiles.index(0.5)].double()
+                    error = torch.where(observed, median - target, 0)
                     absolute += error.abs().sum().item()
                     squared += error.square().sum().item()
                     horizon_error += error.abs().sum((0, 2)).cpu()
                     horizon_count += observed.sum((0, 2)).cpu()
                     if len(model.config.quantiles) > 1:
-                        lower, upper = output.forecast[..., 0], output.forecast[..., -1]
+                        lower, upper = output.forecast[..., 0].double(), output.forecast[..., -1].double()
                         covered += ((target >= lower) & (target <= upper) & observed).sum().item()
                         width += torch.where(observed, upper - lower, 0).double().sum().item()
                         interval_covered += ((target >= lower) & (target <= upper) & observed).sum((0, 2)).cpu()
@@ -85,7 +86,7 @@ def evaluate(model, batches, amp="none", *, calibration=None):
                         raw_score += torch.where(observed, score, 0).double().sum().item()
                         if calibration is not None:
                             interval = calibration.interval(output.forecast)
-                            low, high = interval.unbind(-1)
+                            low, high = interval.double().unbind(-1)
                             calibrated_covered += ((target >= low) & (target <= high) & observed).sum((0, 2)).cpu()
                             calibrated_width += torch.where(observed, high - low, 0).double().sum((0, 2)).cpu()
                             score = high - low + 2 / (1 - calibration.coverage) * (

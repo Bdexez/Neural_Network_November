@@ -90,7 +90,7 @@ def evaluate(model, batches, amp="none", *, calibration=None):
                     accumulate("loss", output.loss.item(), n)
                 for name, value in output.losses.items():
                     accumulate(name, value.item(), weights.get(name, n))
-        result = {name: total / max(counts[name], 1) for name, total in totals.items()}
+        result = {name: total / counts[name] if counts[name] else None for name, total in totals.items()}
         if "text" in counts:
             result["text_tokens"] = counts["text"]
             result["byte_perplexity"] = math.exp(min(result["text"], 20)) if counts["text"] else None

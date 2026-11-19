@@ -16,6 +16,7 @@ def evaluate(model, batches, amp="none", *, calibration=None):
     device = next(model.parameters()).device
     totals, counts = {}, {}
     auxiliary_totals, auxiliary_counts = {}, {}
+    expert_totals, expert_tokens = None, 0
     correct = class_count = forecast_count = 0
     absolute = squared = covered = width = 0.0
     horizon_error = torch.zeros(model.config.forecast_horizon, dtype=torch.float64)
@@ -48,6 +49,13 @@ def evaluate(model, batches, amp="none", *, calibration=None):
                 n = next(iter(batch.values())).size(0)
                 with autocast():
                     output = model(**batch)
+                usage = getattr(output, "expert_usage", None)
+                routed = getattr(output, "routed_tokens", None)
+                if usage is not None and routed is not None:
+                    count = routed.item()
+                    weighted = usage.double().cpu() * count
+                    expert_totals = weighted if expert_totals is None else expert_totals + weighted
+                    expert_tokens += count
                 weights = {}
                 if "labels" in batch:
                     labels = batch["labels"]
@@ -103,6 +111,14 @@ def evaluate(model, batches, amp="none", *, calibration=None):
                         continue
                     accumulate(name, value.item(), weights.get(name, n))
         result = {name: total / counts[name] if counts[name] else None for name, total in totals.items()}
+        if expert_tokens:
+            usage = expert_totals / expert_tokens
+            usage = usage / usage.sum(-1, keepdim=True)
+            entropy = -(usage * usage.clamp_min(1e-300).log()).sum(-1)
+            result["expert_usage"] = usage.tolist()
+            result["expert_routed_tokens"] = expert_tokens
+            result["expert_effective_count"] = entropy.exp().tolist()
+            result["expert_max_load_ratio"] = (usage.max(-1).values * usage.size(-1)).tolist()
         if auxiliary_counts:
             per_horizon = [auxiliary_totals[distance] / count for distance, count in auxiliary_counts.items() if count]
             result["multi_token"] = sum(per_horizon) / len(per_horizon) if per_horizon else None

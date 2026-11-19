@@ -36,6 +36,7 @@ class ChimeraOutput:
     expert_usage: torch.Tensor
     cache: ModelCache | None = None
     auxiliary_text_losses: dict[int, tuple[torch.Tensor, torch.Tensor]] | None = None
+    routed_tokens: torch.Tensor | None = None
 
 
 def masked_cross_entropy(logits, labels):
@@ -297,7 +298,7 @@ class Chimera(nn.Module):
         next_cache = (ModelCache(next_layers, latents, offset + hidden.size(1), mean, scale, baseline, adapter_context)
                       if use_cache else None)
         return ChimeraOutput(logits, class_logits, forecast, total if supervised else None,
-                             losses, torch.stack(usage), next_cache, auxiliary_text_losses)
+                             losses, torch.stack(usage), next_cache, auxiliary_text_losses, valid.sum())
 
     @torch.inference_mode()
     def generate(self, input_ids, *, max_new_tokens=64, temperature=0.8, top_k=40,

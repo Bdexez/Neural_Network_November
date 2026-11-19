@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import pickle
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -143,6 +144,40 @@ class ImprovementTests(unittest.TestCase):
         self.assertEqual(full["classified_examples"], 2)
         self.assertEqual(full["forecast_observations"], 45)
         self.assertEqual(len(full["forecast_mae_by_horizon"]), self.config.forecast_horizon)
+
+    def test_expert_usage_is_weighted_by_valid_tokens(self):
+        class FixedRouting(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.anchor = torch.nn.Parameter(torch.zeros(()))
+                self.config = ChimeraConfig.preset("tiny")
+
+            def forward(self, input_ids, attention_mask):
+                usage = torch.tensor([[1., 0.]]) if input_ids[0, 0] == 1 else torch.tensor([[0., 1.]])
+                return SimpleNamespace(loss=None, losses={}, expert_usage=usage, routed_tokens=attention_mask.sum())
+
+        batches = [dict(input_ids=torch.tensor([[1, 0, 0]]), attention_mask=torch.tensor([[1, 0, 0]])),
+                   dict(input_ids=torch.tensor([[2, 3, 4]]), attention_mask=torch.tensor([[1, 1, 1]]))]
+        report = evaluate(FixedRouting(), batches)
+        self.assertEqual(report["expert_routed_tokens"], 4)
+        self.assertEqual(report["expert_usage"], [[0.25, 0.75]])
+        self.assertEqual(report["expert_max_load_ratio"], [1.5])
+        self.assertAlmostEqual(report["expert_effective_count"][0], 1.7547653506033232)
+
+    def test_expert_usage_is_batch_invariant_and_ignores_padding(self):
+        model = Chimera(self.config).eval()
+        batch = synthetic_batch(self.config, batch_size=4, seed=9001)
+        batch["attention_mask"][0, -8:] = False
+        batch["attention_mask"][1, -4:] = False
+        full = evaluate(model, [batch])
+        chunks = [{key: value[section] for key, value in batch.items()}
+                  for section in (slice(0, 1), slice(1, 4))]
+        split = evaluate(model, chunks)
+        self.assertEqual(full["expert_routed_tokens"], int(batch["attention_mask"].sum()))
+        self.assertEqual(full["expert_routed_tokens"], split["expert_routed_tokens"])
+        torch.testing.assert_close(torch.tensor(full["expert_usage"]), torch.tensor(split["expert_usage"]))
+        torch.testing.assert_close(torch.tensor(full["expert_effective_count"]),
+                                   torch.tensor(split["expert_effective_count"]))
 
     def test_no_observed_targets_do_not_report_perfect_quality(self):
         batch = synthetic_batch(self.config, batch_size=2)

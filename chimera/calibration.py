@@ -1,4 +1,4 @@
-"""Calibration CQR marginale, séparée par horizon et variable.
+"""Calibration CQR marginale ou simultanée sur une trajectoire complète.
 
 Référence : https://arxiv.org/abs/1905.03222. Les exemples de calibration
 doivent être distincts de l'apprentissage et échangeables avec les futurs cas.
@@ -48,6 +48,7 @@ class ForecastCalibration:
     checkpoint_sha256: str | None = None
     dataset_sha256: str | None = None
     amp: str = "none"
+    scope: str = "marginal"
 
     def __post_init__(self):
         self.quantiles, self.modalities = tuple(self.quantiles), tuple(self.modalities)
@@ -59,6 +60,8 @@ class ForecastCalibration:
             raise ValueError("coverage doit être finie et appartenir à ]0, 1[")
         if self.amp not in ("none", "bf16", "fp16"):
             raise ValueError("amp doit être none, bf16 ou fp16")
+        if self.scope not in ("marginal", "joint"):
+            raise ValueError("scope doit être marginal ou joint")
         self.correction = torch.as_tensor(self.correction, dtype=torch.float64).detach().cpu()
         counts = torch.as_tensor(self.counts).detach().cpu()
         if (self.correction.ndim != 2 or not all(self.correction.shape)
@@ -67,6 +70,9 @@ class ForecastCalibration:
                 or (counts != counts.floor()).any()):
             raise ValueError("Corrections finies [H, F] et effectifs entiers positifs requis")
         self.counts = counts.long()
+        if self.scope == "joint" and ((self.correction != self.correction[0, 0]).any()
+                                      or (self.counts != self.counts[0, 0]).any()):
+            raise ValueError("La calibration jointe nécessite une correction et un effectif communs")
         if any(math.ceil((int(n) + 1) * self.coverage) > int(n) for n in self.counts.flatten()):
             raise ValueError("Effectif insuffisant pour une correction conformelle finie")
         if not self.modalities or self.modalities != tuple(name for name in MODALITIES if name in self.modalities):
@@ -76,7 +82,7 @@ class ForecastCalibration:
                 raise ValueError("Une empreinte SHA-256 hexadécimale est requise")
 
     @classmethod
-    def from_scores(cls, scores, quantiles, modalities, *, coverage=None, **provenance):
+    def from_scores(cls, scores, quantiles, modalities, *, coverage=None, scope="marginal", **provenance):
         scores = torch.as_tensor(scores, dtype=torch.float64).detach().cpu()
         if scores.ndim != 3 or not all(scores.shape) or torch.isinf(scores).any():
             raise ValueError("Scores [N, H, F] requis ; seuls les NaN représentent des cibles absentes")
@@ -86,6 +92,18 @@ class ForecastCalibration:
         coverage = quantiles[-1] - quantiles[0] if coverage is None else coverage
         if not math.isfinite(coverage) or not 0 < coverage < 1:
             raise ValueError("coverage doit être finie et appartenir à ]0, 1[")
+        if scope not in ("marginal", "joint"):
+            raise ValueError("scope doit être marginal ou joint")
+        if scope == "joint":
+            complete = torch.isfinite(scores).flatten(1).all(-1)
+            count = complete.sum().item()
+            rank = math.ceil((count + 1) * coverage)
+            if rank > count:
+                raise ValueError(f"Calibration jointe insuffisante : trajectoires complètes n={count}")
+            values = scores[complete].flatten(1).amax(-1)
+            correction = values.kthvalue(rank).values.expand(scores.shape[1:]).clone()
+            counts = torch.full(scores.shape[1:], count, dtype=torch.long)
+            return cls(quantiles, coverage, correction, counts, tuple(modalities), scope=scope, **provenance)
         correction = torch.empty(scores.shape[1:], dtype=torch.float64)
         counts = torch.isfinite(scores).sum(0)
         for horizon in range(scores.size(1)):
@@ -97,7 +115,7 @@ class ForecastCalibration:
                     raise ValueError(f"Calibration insuffisante : horizon {horizon}, variable {feature}, n={len(values)}")
                 # Statistique d'ordre exacte ; pas d'interpolation ni de rang tronqué.
                 correction[horizon, feature] = values.kthvalue(rank).values
-        return cls(quantiles, coverage, correction, counts, tuple(modalities), **provenance)
+        return cls(quantiles, coverage, correction, counts, tuple(modalities), scope=scope, **provenance)
 
     def validate(self, config, batch=None, *, amp=None):
         if (tuple(config.quantiles) != self.quantiles
@@ -118,25 +136,40 @@ class ForecastCalibration:
         if not torch.isfinite(forecast).all() or (forecast[..., 1:] < forecast[..., :-1]).any():
             raise ValueError("Les quantiles prédits doivent être finis et ordonnés")
         prediction = forecast if forecast.dtype in (torch.float32, torch.float64) else forecast.float()
-        correction = self.correction.to(device=forecast.device, dtype=prediction.dtype)
-        median = prediction[..., self.quantiles.index(0.5)]
+        precise = prediction.double()
+        correction = self.correction.to(device=forecast.device)
+        median = precise[..., self.quantiles.index(0.5)]
         # Agrandir si nécessaire l'ensemble CQR pour garder une médiane incluse
         # et des bornes ordonnées, même avec une correction négative importante.
-        lower = torch.minimum(prediction[..., 0] - correction, median)
-        upper = torch.maximum(prediction[..., -1] + correction, median)
+        lower = torch.minimum(precise[..., 0] - correction, median)
+        upper = torch.maximum(precise[..., -1] + correction, median)
+        if prediction.dtype == torch.float32:
+            # Un arrondi vers l'intérieur pourrait exclure une cible située
+            # exactement sur le bord de l'ensemble conformel.
+            low32, high32 = lower.float(), upper.float()
+            low32 = torch.where(low32.double() > lower, torch.nextafter(low32, torch.full_like(low32, -torch.inf)), low32)
+            high32 = torch.where(high32.double() < upper, torch.nextafter(high32, torch.full_like(high32, torch.inf)), high32)
+            lower, upper = low32, high32
         return torch.stack((lower, upper), dim=-1)
 
     def to_dict(self):
-        return dict(format_version=1, quantiles=list(self.quantiles), coverage=self.coverage,
+        data = dict(format_version=1, quantiles=list(self.quantiles), coverage=self.coverage,
                     correction=self.correction.tolist(), counts=self.counts.tolist(),
                     modalities=list(self.modalities), checkpoint_sha256=self.checkpoint_sha256,
                     dataset_sha256=self.dataset_sha256, amp=self.amp)
+        if self.scope == "joint":
+            data.update(format_version=2, scope="joint")
+        return data
 
     @classmethod
     def from_dict(cls, data):
         values = dict(data)
-        if values.pop("format_version", None) != 1:
+        version = values.pop("format_version", None)
+        if version not in (1, 2):
             raise ValueError("Version de calibration inconnue")
+        if (version == 1 and values.get("scope", "marginal") != "marginal"
+                or version == 2 and values.get("scope") != "joint"):
+            raise ValueError("Version et portée de calibration incompatibles")
         return cls(**values)
 
     @classmethod
@@ -144,10 +177,12 @@ class ForecastCalibration:
         return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
 
 
-def fit_calibration(model, batches, *, coverage=None, amp="none", **provenance):
+def fit_calibration(model, batches, *, coverage=None, amp="none", scope="marginal", **provenance):
     """Conserver les seuls scores scalaires, sans stocker les entrées du réseau."""
     if amp not in ("none", "bf16", "fp16"):
         raise ValueError("amp doit être none, bf16 ou fp16")
+    if scope not in ("marginal", "joint"):
+        raise ValueError("scope doit être marginal ou joint")
     quantiles = tuple(model.config.quantiles)
     if len(quantiles) < 2:
         raise ValueError("Au moins deux quantiles sont requis")
@@ -177,6 +212,6 @@ def fit_calibration(model, batches, *, coverage=None, amp="none", **provenance):
         if not scores:
             raise ValueError("Le jeu de calibration est vide")
         return ForecastCalibration.from_scores(torch.cat(scores), quantiles, signature,
-                                               coverage=coverage, amp=amp, **provenance)
+                                               coverage=coverage, amp=amp, scope=scope, **provenance)
     finally:
         model.train(was_training)

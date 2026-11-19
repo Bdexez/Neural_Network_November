@@ -78,6 +78,9 @@ class CalibrationTests(unittest.TestCase):
             self.assertAlmostEqual(full[name], split[name], places=5, msg=name)
         self.assertIsNone(full["calibrated_interval_coverage_by_horizon"][-1])
         self.assertIsNone(full["forecast_interval_width_by_horizon"][-1])
+        self.assertEqual(full["forecast_complete_examples"], 0)
+        self.assertIsNone(full["forecast_joint_interval_coverage"])
+        self.assertIsNone(full["calibrated_joint_interval_coverage"])
         self.assertTrue(model.training)
         bad = {"series": batch["series"], "forecast_targets": batch["forecast_targets"]}
         with self.assertRaisesRegex(ValueError, "modalités"):
@@ -145,6 +148,85 @@ class CalibrationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "horizon 1, variable 0"):
             ForecastCalibration.from_scores(scores, (0.1, 0.5, 0.9), ("series",))
 
+    def test_joint_calibration_uses_maximum_score_and_complete_trajectories(self):
+        values = torch.arange(10, dtype=torch.float64)[:, None, None]
+        scores = values + torch.tensor([[0., 2.], [-1., 1.]], dtype=torch.float64)
+        scores[0, 0, 0] = float("nan")
+        fitted = ForecastCalibration.from_scores(scores, (0.1, 0.5, 0.9), ("series",), scope="joint")
+        self.assertEqual(fitted.scope, "joint")
+        torch.testing.assert_close(fitted.counts, torch.full((2, 2), 9))
+        torch.testing.assert_close(fitted.correction, torch.full((2, 2), 10., dtype=torch.float64))
+        restored = ForecastCalibration.from_dict(json.loads(json.dumps(fitted.to_dict())))
+        self.assertEqual(restored.to_dict()["format_version"], 2)
+        self.assertEqual(restored.scope, "joint")
+        torch.testing.assert_close(restored.correction, fitted.correction)
+        with self.assertRaisesRegex(ValueError, "trajectoires complètes"):
+            ForecastCalibration.from_scores(scores[:3], (0.1, 0.5, 0.9), ("series",), scope="joint")
+        broken = fitted.to_dict()
+        broken["correction"][0][0] += 1
+        with self.assertRaisesRegex(ValueError, "correction et un effectif communs"):
+            ForecastCalibration.from_dict(broken)
+        broken = fitted.to_dict()
+        broken["counts"][0][0] -= 1
+        with self.assertRaisesRegex(ValueError, "correction et un effectif communs"):
+            ForecastCalibration.from_dict(broken)
+
+    def test_joint_coverage_on_independent_multivariate_samples(self):
+        generator = torch.Generator().manual_seed(830)
+        targets = torch.randn(7000, 3, 2, generator=generator)
+        forecasts = torch.tensor([-0.5, 0., 0.5]).expand(7000, 3, 2, 3)
+        scores = conformity_scores(forecasts[:1000], targets[:1000])
+        joint = ForecastCalibration.from_scores(scores, (0.1, 0.5, 0.9), ("series",), scope="joint")
+        marginal = ForecastCalibration.from_scores(scores, (0.1, 0.5, 0.9), ("series",))
+
+        def coverage(calibration):
+            interval = calibration.interval(forecasts[1000:])
+            inside = (targets[1000:] >= interval[..., 0]) & (targets[1000:] <= interval[..., 1])
+            return inside.flatten(1).all(-1).float().mean().item(), (interval[..., 1] - interval[..., 0]).mean().item()
+
+        joint_coverage, joint_width = coverage(joint)
+        marginal_coverage, marginal_width = coverage(marginal)
+        self.assertAlmostEqual(joint_coverage, 0.8, delta=0.045)
+        self.assertGreater(joint_coverage, marginal_coverage + 0.25)
+        self.assertGreater(joint_width, marginal_width)
+
+    def test_joint_fitting_is_batch_invariant_with_missing_trajectories(self):
+        model = Chimera(ChimeraConfig.preset("tiny")).train()
+        batch = synthetic_batch(model.config, batch_size=12, seed=1231)
+        batch["forecast_targets"][:2, 0, 0] = float("nan")
+        full = fit_calibration(model, [batch], scope="joint")
+        chunks = [{key: value[section] for key, value in batch.items()}
+                  for section in (slice(0, 4), slice(4, 12))]
+        split = fit_calibration(model, chunks, scope="joint")
+        self.assertEqual(full.counts[0, 0].item(), 10)
+        torch.testing.assert_close(full.correction, split.correction, rtol=2e-5, atol=2e-6)
+        self.assertTrue(model.training)
+
+    def test_joint_interval_coverage_uses_only_complete_examples(self):
+        class FixedForecast(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.anchor = torch.nn.Parameter(torch.zeros(()))
+                self.config = replace(ChimeraConfig.preset("tiny"), forecast_horizon=2, series_features=2)
+
+            def forward(self, series, **kwargs):
+                forecast = series.new_tensor([-1., 0., 1.]).expand(series.size(0), 2, 2, 3)
+                return SimpleNamespace(forecast=forecast, loss=None, losses={"forecast": self.anchor * 0})
+
+        calibration = ForecastCalibration((0.1, 0.5, 0.9), 0.8, [[1., 1.], [1., 1.]],
+                                          [[20, 20], [20, 20]], ("series",), scope="joint")
+        targets = torch.zeros(4, 2, 2)
+        targets[1, 1, 1] = 2
+        targets[2, 0, 0] = float("nan")
+        targets[3] = float("nan")
+        batch = dict(series=torch.ones(4, 1, 2), forecast_targets=targets)
+        report = evaluate(FixedForecast(), [batch], calibration=calibration)
+        self.assertEqual(report["forecast_complete_examples"], 2)
+        self.assertEqual(report["forecast_joint_interval_coverage"], 0.5)
+        self.assertEqual(report["calibrated_joint_interval_coverage"], 1)
+        self.assertEqual(report["calibrated_coverage_scope"], "joint")
+        self.assertIsNone(report["calibrated_interval_score"])
+
     def test_negative_correction_shrinks_and_never_inverts_interval_or_changes_quantiles(self):
         fitted = ForecastCalibration((0.1, 0.5, 0.9), 0.8, [[-2.]], [[20]], ("series",))
         forecasts = torch.tensor([[[[-1., 0.25, 1.]]]])
@@ -154,6 +236,17 @@ class CalibrationTests(unittest.TestCase):
         torch.testing.assert_close(forecasts, original, rtol=0, atol=0)
         fitted.correction.fill_(0.5)
         torch.testing.assert_close(fitted.interval(forecasts), torch.tensor([[[[-1.5, 1.5]]]]))
+
+    def test_float32_bounds_round_outward_for_calibration_boundary(self):
+        upper = torch.tensor(-0.001368486089631915, dtype=torch.float32)
+        target = torch.tensor(-9.519225386611652e-06, dtype=torch.float32)
+        correction = target.double() - upper.double()
+        forecast = torch.tensor([[[[-0.1, -0.01, upper.item()]]]], dtype=torch.float32)
+        fitted = ForecastCalibration((0.1, 0.5, 0.9), 0.8, correction.reshape(1, 1), [[20]], ("series",))
+        interval = fitted.interval(forecast)
+        self.assertEqual(interval.dtype, torch.float32)
+        self.assertGreaterEqual(interval[0, 0, 0, 1].item(), target.item())
+        self.assertLess((interval[0, 0, 0, 1].double() - target.double()).item(), 1e-10)
 
     def test_json_roundtrip_binds_checkpoint_and_modalities(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -179,7 +272,7 @@ class CalibrationTests(unittest.TestCase):
         for change in (dict(coverage=1), dict(coverage=float("nan")), dict(counts=[[0]]),
                        dict(counts=[[1.5]]), dict(correction=[[float("inf")]]),
                        dict(modalities=("series", "images")), dict(checkpoint_sha256="invalid"),
-                       dict(quantiles=(0.1, 0.9))):
+                       dict(quantiles=(0.1, 0.9)), dict(scope="invalid")):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 ForecastCalibration(**(valid | change))
         for forecast in (torch.tensor([[[[1., 0., -1.]]]]), torch.full((1, 1, 1, 3), float("nan"))):
@@ -187,6 +280,8 @@ class CalibrationTests(unittest.TestCase):
                 conformity_scores(forecast, torch.zeros(1, 1, 1))
         with self.assertRaises(ValueError):
             ForecastCalibration.from_dict(dict(format_version=999))
+        with self.assertRaisesRegex(ValueError, "Version et portée"):
+            ForecastCalibration.from_dict(dict(format_version=1, scope="joint"))
 
 
 if __name__ == "__main__":

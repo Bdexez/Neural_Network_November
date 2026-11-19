@@ -170,6 +170,8 @@ def main(argv=None):
     calibrating.add_argument("--output", required=True)
     calibrating.add_argument("--batch-size", type=int, default=4)
     calibrating.add_argument("--coverage", type=float, help="Couverture cible ; défaut : quantile max - min")
+    calibrating.add_argument("--scope", choices=("marginal", "joint"), default="marginal",
+                             help="Couverture par coordonnée ou simultanée sur la trajectoire complète")
     calibrating.add_argument("--device", default="cpu")
     calibrating.add_argument("--amp", choices=("none", "bf16", "fp16"), default="none")
     refining = commands.add_parser("refine-forecast", help="Ajuster seulement la correction des historiques courts")
@@ -272,6 +274,7 @@ def main(argv=None):
                 if calibration is not None:
                     row["calibrated_interval"] = calibration.interval(output.forecast)[0].tolist()
                     row["calibrated_nominal_coverage"] = calibration.coverage
+                    row["calibrated_coverage_scope"] = calibration.scope
                 if args.max_new_tokens and "input_ids" in batch:
                     prompt = batch["input_ids"]
                     if prompt[0, -1] == ByteTokenizer.eos_id:
@@ -342,14 +345,14 @@ def main(argv=None):
         loader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=collate_records,
                             generator=torch.Generator().manual_seed(0))
         if args.command == "calibrate":
-            calibration = fit_calibration(model, loader, coverage=args.coverage, amp=args.amp,
+            calibration = fit_calibration(model, loader, coverage=args.coverage, amp=args.amp, scope=args.scope,
                                           checkpoint_sha256=file_sha256(args.checkpoint),
                                           dataset_sha256=dataset.fingerprint)
             content = json.dumps(calibration.to_dict(), indent=2, allow_nan=False) + "\n"
             with prediction_stream(args.output) as stream:
                 stream.write(content)
             print(json.dumps(dict(calibration=args.output, coverage=calibration.coverage,
-                                  examples=len(dataset), modalities=calibration.modalities)))
+                                  scope=calibration.scope, examples=len(dataset), modalities=calibration.modalities)))
             return
         calibration = ForecastCalibration.load(args.calibration) if args.calibration else None
         if calibration is not None:

@@ -3,6 +3,8 @@ from dataclasses import replace
 import io
 import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -16,6 +18,29 @@ from chimera.training import save_checkpoint
 
 
 class CalibrationCliTests(unittest.TestCase):
+    def test_joint_benchmark_rejects_overlapping_seeds_and_preserves_checkpoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = replace(ChimeraConfig.preset("tiny"), forecast_horizon=2, series_features=1)
+            checkpoint = root / "model.pt"
+            save_checkpoint(checkpoint, Chimera(config))
+            original = checkpoint.read_bytes()
+            report = root / "report.json"
+            common = [sys.executable, "tools/benchmark_joint_calibration.py", "--checkpoint", str(checkpoint),
+                      "--batch-size", "2", "--calibration-batches", "5", "--test-batches", "2"]
+            result = subprocess.run([*common, "--output", str(report)], text=True, capture_output=True, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            data = json.loads(report.read_text())
+            for condition in ("series", "all"):
+                joint = data["measurements"][condition]["joint"]
+                self.assertEqual(joint["calibration"]["scope"], "joint")
+                self.assertEqual(joint["evaluation"]["forecast_complete_examples"], 4)
+            for options in (("--test-seed", "4100001", "--output", str(report)),
+                            ("--output", str(checkpoint))):
+                result = subprocess.run([*common, *options], text=True, capture_output=True, timeout=60)
+                self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(checkpoint.read_bytes(), original)
+
     def test_fit_evaluate_predict_and_reject_incompatible_or_destructive_outputs(self):
         with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             root = Path(directory)
@@ -33,6 +58,8 @@ class CalibrationCliTests(unittest.TestCase):
                   "--batch-size", "4", "--output", str(calibration_path)])
             fitted = ForecastCalibration.load(calibration_path)
             self.assertEqual(fitted.modalities, ("series",))
+            self.assertEqual(fitted.scope, "marginal")
+            self.assertEqual(fitted.to_dict()["format_version"], 1)
             self.assertEqual(fitted.counts.tolist(), [[12], [12]])
             report_path, predictions = root / "report.json", root / "predictions.jsonl"
             common = ["--checkpoint", str(checkpoint), "--data", str(test_data),
@@ -41,6 +68,23 @@ class CalibrationCliTests(unittest.TestCase):
             report = json.loads(report_path.read_text())
             self.assertFalse(report["calibration_data_reused"])
             self.assertIn("calibrated_interval_score", report)
+            joint_path = root / "joint.json"
+            main(["calibrate", "--checkpoint", str(checkpoint), "--data", str(calibration_data),
+                  "--batch-size", "4", "--scope", "joint", "--output", str(joint_path)])
+            joint = ForecastCalibration.load(joint_path)
+            self.assertEqual(joint.scope, "joint")
+            self.assertEqual(joint.counts.tolist(), [[12], [12]])
+            main(["evaluate", "--checkpoint", str(checkpoint), "--data", str(test_data),
+                  "--calibration", str(joint_path), "--output", str(report_path)])
+            joint_report = json.loads(report_path.read_text())
+            self.assertEqual(joint_report["forecast_complete_examples"], 7)
+            self.assertEqual(joint_report["calibrated_coverage_scope"], "joint")
+            self.assertIsNotNone(joint_report["calibrated_joint_interval_coverage"])
+            self.assertIsNone(joint_report["calibrated_interval_score"])
+            main(["predict", "--checkpoint", str(checkpoint), "--data", str(test_data),
+                  "--calibration", str(joint_path), "--output", str(predictions)])
+            self.assertTrue(all(json.loads(line)["calibrated_coverage_scope"] == "joint"
+                                for line in predictions.read_text().splitlines()))
             main(["predict", *common, "--output", str(predictions)])
             rows = [json.loads(line) for line in predictions.read_text().splitlines()]
             self.assertEqual(len(rows), 7)

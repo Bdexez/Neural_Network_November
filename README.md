@@ -12,7 +12,7 @@ Les [améliorations mesurées](IMPROVEMENTS.md) décrivent le cache borné, le c
 
 Le [suivi de l'apprentissage](LEARNING.md) présente le fine-tuning du modèle existant, la comparaison des politiques de modalités et leurs compromis mesurés.
 
-La [calibration des prévisions](CALIBRATION.md) ajuste les intervalles sur un jeu séparé et mesure leur couverture sur un test indépendant, avec des résultats pour les sept combinaisons de modalités.
+La [calibration des prévisions](CALIBRATION.md) ajuste les intervalles sur un jeu séparé, par coordonnée ou pour la couverture simultanée d'une trajectoire, et mesure leur couverture sur un test indépendant.
 
 Les [historiques courts et observations manquantes](ROBUSTNESS.md) couvrent l'augmentation temporelle, sa reprise reproductible et les comparaisons avec un entraînement témoin.
 

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import random
 import time
+import warnings
 
 import torch
 from torch import distributed as dist
@@ -29,7 +30,22 @@ def seed_everything(seed):
         torch.cuda.manual_seed_all(seed)
 
 
-def save_checkpoint(path, model, *, optimizer=None, scaler=None, step=0, trainer=None):
+def capture_rng_state(device):
+    return dict(torch=torch.get_rng_state(), python=random.getstate(),
+                cuda=torch.cuda.get_rng_state(device) if device.type == "cuda" else None)
+
+
+def collect_rng_states(device, world, rank):
+    """Tous les rangs participent ; seul le rang 0 reçoit la liste ordonnée."""
+    state = capture_rng_state(device)
+    if world == 1:
+        return None
+    states = [None] * world if rank == 0 else None
+    dist.gather_object(state, states, dst=0)
+    return states
+
+
+def save_checkpoint(path, model, *, optimizer=None, scaler=None, step=0, trainer=None, rank_rng=None):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -42,6 +58,8 @@ def save_checkpoint(path, model, *, optimizer=None, scaler=None, step=0, trainer
         payload["optimizer"] = optimizer.state_dict()
     if scaler is not None:
         payload["scaler"] = scaler.state_dict()
+    if rank_rng is not None:
+        payload["rank_rng"] = rank_rng
     temporary = path.with_name(path.name + ".tmp")
     try:
         torch.save(payload, temporary)
@@ -123,6 +141,18 @@ def step_optimizer(model, optimizer, scaler, grad_clip):
     scaler.update()
     skipped = scaler.is_enabled() and scaler.get_scale() < previous_scale
     return float(norm) if torch.isfinite(norm) else None, skipped
+
+
+class DistributedTrainingModel(torch.nn.Module):
+    """Ne présenter à DDP que la perte participant au backward."""
+
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, **batch):
+        output = self.model(**batch)
+        return output.loss, {name: value.detach() for name, value in output.losses.items()}, output.expert_usage.detach()
 
 
 def train(args, config):
@@ -232,13 +262,32 @@ def train(args, config):
         optimizer.load_state_dict(payload["optimizer"])
     if "scaler" in payload:
         scaler.load_state_dict(payload["scaler"])
-    if args.resume and world == 1:
-        torch.set_rng_state(payload["torch_rng"])
-        random.setstate(payload["python_rng"])
-        if device.type == "cuda" and payload["cuda_rng"]:
-            torch.cuda.set_rng_state_all(payload["cuda_rng"])
+    if args.resume:
+        if world == 1:
+            torch.set_rng_state(payload["torch_rng"])
+            random.setstate(payload["python_rng"])
+            if device.type == "cuda" and payload["cuda_rng"]:
+                torch.cuda.set_rng_state_all(payload["cuda_rng"])
+        elif "rank_rng" in payload:
+            states = payload["rank_rng"]
+            if not isinstance(states, list) or len(states) != world:
+                raise ValueError("États aléatoires distribués incompatibles avec le nombre de processus")
+            state_for_rank = states[rank]
+            torch.set_rng_state(state_for_rank["torch"])
+            random.setstate(state_for_rank["python"])
+            if device.type == "cuda":
+                if state_for_rank["cuda"] is None:
+                    if rank == 0:
+                        warnings.warn("Checkpoint sans état aléatoire CUDA : la reprise ne sera pas exacte.", RuntimeWarning)
+                else:
+                    torch.cuda.set_rng_state(state_for_rank["cuda"], device)
+            elif state_for_rank["cuda"] is not None and rank == 0:
+                warnings.warn("Checkpoint CUDA repris sur CPU : la reprise ne sera pas exacte.", RuntimeWarning)
+        elif rank == 0:
+            warnings.warn("Checkpoint distribué ancien : les états aléatoires par rang ne sont pas disponibles ; "
+                          "la reprise ne sera pas exacte.", RuntimeWarning)
     del payload
-    wrapped = (DistributedDataParallel(model, device_ids=[local_rank] if device.type == "cuda" else None,
+    wrapped = (DistributedDataParallel(DistributedTrainingModel(model), device_ids=[local_rank] if device.type == "cuda" else None,
                                       find_unused_parameters=True) if world > 1 else model)
     sampler = loader = iterator = None
     epoch = 0
@@ -317,16 +366,20 @@ def train(args, config):
             sync = wrapped.no_sync() if world > 1 and micro + 1 < args.accumulation else nullcontext()
             with sync, autocast():
                 result = wrapped(**batch)
-                if result.loss is None:
+                if world > 1:
+                    batch_loss, batch_losses, batch_usage = result
+                else:
+                    batch_loss, batch_losses, batch_usage = result.loss, result.losses, result.expert_usage
+                if batch_loss is None:
                     raise ValueError("Aucune cible d'entraînement dans le batch")
-                loss = result.loss / args.accumulation
+                loss = batch_loss / args.accumulation
             if not torch.isfinite(loss):
                 raise FloatingPointError(f"Perte non finie à l'étape {step + 1}")
             scaler.scale(loss).backward()
-            metrics["loss"] = metrics.get("loss", 0) + result.loss.item() / args.accumulation
-            for key, value in result.losses.items():
+            metrics["loss"] = metrics.get("loss", 0) + batch_loss.item() / args.accumulation
+            for key, value in batch_losses.items():
                 metrics[key] = metrics.get(key, 0) + value.detach().item() / args.accumulation
-            expert_usage = result.expert_usage
+            expert_usage = batch_usage
         norm, skipped = step_optimizer(model, optimizer, scaler, args.grad_clip)
         last_step = step + 1
         if rank == 0:
@@ -342,6 +395,7 @@ def train(args, config):
         # sa reprise doit conserver le même calendrier d'arrêt anticipé.
         validation_event = last_step % args.eval_every == 0 or last_step == args.steps
         if validation_event:
+            improved = False
             if rank == 0:
                 report = evaluate(model, val, args.amp)
                 observed = sum(report.get(name, 0) for name in
@@ -361,9 +415,6 @@ def train(args, config):
                     state.update(reference_loss=score, bad_evaluations=0)
                 else:
                     state["bad_evaluations"] += 1
-                if improved:
-                    save_checkpoint(output_dir / "best.pt", model, optimizer=optimizer, scaler=scaler,
-                                    step=last_step, trainer=trainer)
                 stopped_early = bool(args.patience and state["bad_evaluations"] >= args.patience)
                 with (output_dir / "validation.jsonl").open("a", encoding="utf-8") as stream:
                     stream.write(json.dumps(dict(step=last_step, improved=improved, monitor=args.monitor,
@@ -372,12 +423,19 @@ def train(args, config):
                                   "monitor": args.monitor, "monitor_value": score,
                                   "best_step": state["best_step"]}), flush=True)
             if world > 1:
-                decision = torch.tensor(int(stopped_early), device=device)
+                decision = torch.tensor([int(stopped_early), int(improved)], device=device)
                 dist.broadcast(decision, src=0)
-                stopped_early = bool(decision.item())
-        if rank == 0 and (last_step % args.save_every == 0 or last_step == end_step or stopped_early):
-            save_checkpoint(output_dir / "latest.pt", model, optimizer=optimizer, scaler=scaler,
-                            step=last_step, trainer=trainer)
+                stopped_early, improved = map(bool, decision.tolist())
+            if improved:
+                rank_rng = collect_rng_states(device, world, rank)
+                if rank == 0:
+                    save_checkpoint(output_dir / "best.pt", model, optimizer=optimizer, scaler=scaler,
+                                    step=last_step, trainer=trainer, rank_rng=rank_rng)
+        if last_step % args.save_every == 0 or last_step == end_step or stopped_early:
+            rank_rng = collect_rng_states(device, world, rank)
+            if rank == 0:
+                save_checkpoint(output_dir / "latest.pt", model, optimizer=optimizer, scaler=scaler,
+                                step=last_step, trainer=trainer, rank_rng=rank_rng)
         if stopped_early:
             break
     if rank == 0:

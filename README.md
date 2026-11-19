@@ -225,6 +225,20 @@ Le lecteur indexe les positions des lignes et charge les exemples à la demande 
 
 Les textes longs sont tronqués à `max_seq_len` en conservant EOS. Les historiques trop longs sont refusés pour éviter une troncature silencieuse. `null` dans un tableau numérique est converti en valeur manquante par l'outil de génération/chargement ; les tenseurs d'historique acceptent NaN. Les cibles de prévision non finies sont ignorées dans la perte.
 
+Avant l'entraînement ou la calibration, comparer les jeux pour repérer des exemples dont les champs choisis sont identiques, même si les lignes sont réordonnées ou le JSON reformaté :
+
+```bash
+.venv/bin/python -m chimera audit-splits \
+  --split train=data/train.jsonl --split calibration=data/calibration.jsonl --split test=data/test.jsonl \
+  --fields series future --output runs/split-audit.json --fail-on-overlap
+```
+
+Par défaut, la comparaison utilise les champs lus par le modèle ; `--fields` sélectionne d'autres champs présents dans chaque ligne. Les nombres JSON égaux sont comparés sans perte décimale, les doublons sont comptés et les rapports indiquent des numéros de lignes sans recopier les valeurs. Le code de sortie vaut 2 si `--fail-on-overlap` détecte un partage ; le rapport est écrit avant la sortie. Cette option n'est pas automatiquement appliquée à `train` ou `calibrate`.
+
+Pour détecter aussi des fenêtres différentes qui se recouvrent, les lignes peuvent porter des métadonnées numériques supplémentaires représentant **toute la fenêtre, historique et futur compris** : par exemple `series_id`, `window_start` et `window_end`. Ajouter `--interval-fields series_id window_start window_end` compare les intervalles semi-ouverts `[start, end[` par série et par paire de jeux. Les bornes doivent utiliser les mêmes unités ; deux fenêtres qui se touchent seulement en une borne ne se recouvrent pas. Le rapport compte les lignes concernées dans chaque jeu, pas toutes les paires possibles. Ces métadonnées ne sont pas utilisées comme entrées du modèle.
+
+L'audit conserve des empreintes par exemple et, si demandé, les intervalles en mémoire : son coût mémoire grandit avec la taille des jeux. Il ne lit pas le contenu des images externes et ne valide pas les métadonnées temporelles contre les données brutes. Des images identiques portant des chemins différents, des fenêtres proches, des copies modifiées ou des sujets apparentés peuvent lui échapper. L'absence de correspondance ne prouve pas l'indépendance statistique.
+
 Pour les séries d'amplitude courante, les statistiques temporelles sont calculées en FP32 comme auparavant. Si leur amplitude risque de faire déborder la somme des carrés, elles passent en FP64 ; les prévisions associées peuvent alors être en FP64. Les amplitudes dépassant la plage sûre du calcul FP64 sont refusées explicitement. Ce contrôle d'amplitude peut ajouter une synchronisation sur GPU.
 
 Utiliser directement les tenseurs :

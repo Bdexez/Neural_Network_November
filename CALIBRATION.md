@@ -6,6 +6,8 @@ Le réseau fournit des quantiles ordonnés, mais leur couverture observée peut 
 
 Choisir le checkpoint définitif, puis préparer un JSONL de calibration contenant des `future` observés. Ce fichier doit être distinct des données d'apprentissage, de sélection du modèle et du test final. Le format est celui des [données personnalisées](README.md).
 
+La commande [`audit-splits`](README.md#données-et-api) peut repérer des lignes communes et, si les bornes sont fournies, des fenêtres temporelles qui se recouvrent entre ces jeux. Elle ne prouve pas leur indépendance.
+
 ```bash
 # Ajuster sur des exemples réservés à la calibration
 .venv/bin/python -m chimera --threads 8 calibrate \

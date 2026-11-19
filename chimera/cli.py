@@ -15,6 +15,7 @@ from .config import ChimeraConfig
 from .data import JointDataset, collate_records, synthetic_batch
 from .forecast_adapter import fit_forecast_adapter
 from .model import Chimera
+from .split_audit import audit_splits
 from .tokenizer import ByteTokenizer
 from .training import evaluate, load_checkpoint, save_checkpoint, train
 
@@ -80,6 +81,15 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     inspect = commands.add_parser("inspect", help="Compter les paramètres sans allouer les poids")
     inspect.add_argument("--all", action="store_true", help="Inspecter tous les presets")
+    audit = commands.add_parser("audit-splits", help="Détecter des exemples ou fenêtres partagés entre jeux JSONL")
+    audit.add_argument("--split", action="append", required=True, metavar="NOM=FICHIER",
+                       help="Jeu nommé ; indiquer au moins deux fois")
+    audit.add_argument("--fields", nargs="+", help="Champs exacts à comparer ; tous obligatoires")
+    audit.add_argument("--interval-fields", nargs=3, metavar=("GROUPE", "DEBUT", "FIN"),
+                       help="Métadonnées des intervalles numériques [début, fin[")
+    audit.add_argument("--max-examples", type=int, default=5, help="Nombre maximal de paires de lignes par diagnostic")
+    audit.add_argument("--output", help="Rapport JSON, sinon sortie standard")
+    audit.add_argument("--fail-on-overlap", action="store_true", help="Quitter avec le code 2 si un recouvrement est détecté")
     demo = commands.add_parser("demo", help="Exécuter les trois modalités et les trois sorties")
     training = commands.add_parser("train", help="Entraînement conjoint réel")
     for command in (inspect, demo, training):
@@ -198,7 +208,22 @@ def main(argv=None):
     if args.threads < 1:
         parser.error("threads doit être > 0")
     torch.set_num_threads(args.threads)
-    if args.command == "inspect":
+    if args.command == "audit-splits":
+        splits = {}
+        for entry in args.split:
+            name, separator, path = entry.partition("=")
+            if not separator or not name or not path or name.strip() != name or name in splits:
+                parser.error("Chaque --split doit être NOM=FICHIER avec un nom distinct et non vide")
+            splits[name] = path
+        report = audit_splits(splits, fields=args.fields, interval_fields=args.interval_fields,
+                              output=args.output, max_examples=args.max_examples)
+        with prediction_stream(args.output) as stream:
+            stream.write(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
+        if args.fail_on_overlap and any(pair["shared_unique_records"] or
+                                        pair.get("intervals", {}).get("groups_with_overlap", 0)
+                                        for pair in report["pairs"]):
+            raise SystemExit(2)
+    elif args.command == "inspect":
         if args.all:
             report = {name: inspect_config(ChimeraConfig.preset(name))
                       for name in ("tiny", "small", "workstation", "base", "large", "ultra")}

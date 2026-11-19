@@ -122,13 +122,20 @@ class JointDataset(Dataset):
 
 
 def collate_records(items):
+    if not items:
+        raise ValueError("Le batch ne peut pas être vide")
     result = {}
-    for name in ("images", "class_labels", "forecast_targets"):
+    for name in ("input_ids", "images", "series"):
         present = [name in item for item in items]
-        if any(present):
-            if not all(present):
-                raise ValueError(f"{name} doit être fourni pour tout le batch")
-            result[name] = torch.stack([item[name] for item in items])
+        if any(present) and not all(present):
+            raise ValueError(f"{name} doit être fourni pour tout le batch")
+    if "images" in items[0]:
+        result["images"] = torch.stack([item["images"] for item in items])
+    for name, missing in (("class_labels", -100), ("forecast_targets", float("nan"))):
+        example = next((item[name] for item in items if name in item), None)
+        if example is not None:
+            result[name] = torch.stack([item[name] if name in item else torch.full_like(example, missing)
+                                        for item in items])
     if "input_ids" in items[0]:
         length = max(item["input_ids"].size(0) for item in items)
         ids = torch.full((len(items), length), ByteTokenizer.pad_id, dtype=torch.long)

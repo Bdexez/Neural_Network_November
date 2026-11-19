@@ -194,7 +194,7 @@ DDP réplique le modèle sur chaque processus ; il ne répartit pas les experts 
 
 ## Données et API
 
-Un fichier JSONL contient un objet par ligne. Les champs de modalités doivent être cohérents dans un même fichier ; chaque modalité est facultative, mais au moins une est requise. Pour entraîner, fournir du texte ou au moins une cible de classification/prévision.
+Un fichier JSONL contient un objet par ligne. Les champs de modalités doivent être cohérents dans un même fichier ; chaque modalité est facultative, mais au moins une est requise. Les champs `class_label` et `future` peuvent être omis pour certains exemples : leurs cibles sont alors ignorées dans les pertes et les mesures. Chaque lot d'entraînement doit toutefois contenir du texte ou au moins une cible de classification/prévision.
 
 Le lecteur indexe les positions des lignes et charge les exemples à la demande : il garde environ 16 octets d'index par exemple, au lieu de conserver tous les tableaux Python. Le fichier est parcouru une fois à l'ouverture pour valider les modalités et calculer son empreinte. Les erreurs de conversion indiquent le fichier et la ligne. La commande `predict` écrit les résultats progressivement et remplace son fichier de sortie uniquement après une exécution réussie.
 

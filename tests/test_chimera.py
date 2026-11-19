@@ -286,6 +286,46 @@ class ChimeraTests(unittest.TestCase):
             self.assertTrue(torch.isnan(item["series"][0, 1]))
             self.assertTrue(torch.isfinite(self.model(**collate_records([item])).loss))
 
+    def test_jsonl_partially_labeled_records_train_and_evaluate(self):
+        from chimera.evaluation import evaluate
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "partial.jsonl"
+            future = [[float(step), 2.0, 3.0] for step in range(self.config.forecast_horizon)]
+            records = [dict(series=[[1, 2, 3], [2, 3, 4]], class_label=2),
+                       dict(series=[[2, 3, 4], [3, 4, 5]], future=future)]
+            path.write_text("\n".join(json.dumps(record) for record in records))
+            dataset = JointDataset(path, self.config)
+            for order in ((0, 1), (1, 0)):
+                batch = collate_records([dataset[index] for index in order])
+                self.assertEqual(batch["class_labels"].tolist(), [2 if index == 0 else -100 for index in order])
+                self.assertTrue(torch.isnan(batch["forecast_targets"][order.index(0)]).all())
+                self.model.zero_grad()
+                loss = self.model(**batch).loss
+                loss.backward()
+                self.assertTrue(torch.isfinite(loss))
+                self.assertTrue(torch.isfinite(self.model.classifier.weight.grad).all())
+                report = evaluate(self.model, [batch])
+                self.assertEqual(report["classified_examples"], 1)
+                self.assertEqual(report["forecast_observations"], self.config.forecast_horizon * 3)
+            output = Path(directory) / "run"
+            with redirect_stdout(io.StringIO()):
+                main(["--threads", "2", "train", "--preset", "tiny", "--data", str(path),
+                      "--val-data", str(path), "--steps", "2", "--warmup", "1",
+                      "--batch-size", "2", "--eval-every", "1", "--output", str(output)])
+            report = json.loads((output / "evaluation.json").read_text())
+            self.assertEqual(report["classified_examples"], 1)
+            self.assertEqual(report["forecast_observations"], self.config.forecast_horizon * 3)
+
+    def test_collate_rejects_inconsistent_modalities_in_any_order(self):
+        for name, value in (("input_ids", torch.tensor([1, 2])),
+                            ("series", torch.ones(2, 3)), ("images", torch.ones(3, 32, 32))):
+            for items in (({}, {name: value}), ({name: value}, {})):
+                with self.subTest(name=name, items=items), self.assertRaisesRegex(ValueError, name):
+                    collate_records(items)
+        with self.assertRaisesRegex(ValueError, "vide"):
+            collate_records([])
+
     @unittest.skipUnless(importlib.util.find_spec("PIL"), "Installer l'extra vision pour tester PNG/JPEG")
     def test_png_loading_resizes_and_normalizes(self):
         from PIL import Image

@@ -1,0 +1,386 @@
+{
+  "settings": {
+    "checkpoint": "runs/joint-affine-pilot/control/latest.pt",
+    "output": "runs/missing-gate-study.json",
+    "train_batches": 64,
+    "test_batches": 16,
+    "batch_size": 32,
+    "train_seed": 22000000,
+    "train_mask_seed": 23000000,
+    "test_seed": 24000000,
+    "test_mask_seed": 25000000,
+    "threads": 2
+  },
+  "checkpoint_sha256": "2d2b6619ddf019a83f2458343b8665d091e62d1513507b9f7f8c97533e45fe43",
+  "checkpoint_step": 180,
+  "torch_version": "2.15.0+cpu",
+  "train_cases": [
+    "complete",
+    "history16",
+    "history8",
+    "missing10",
+    "missing30",
+    "history16_missing30",
+    "history8_missing30"
+  ],
+  "measurements": {
+    "base": {
+      "fit": null,
+      "cases": {
+        "complete": {
+          "series": {
+            "forecast_mae": 0.23218527402962585,
+            "forecast_rmse": 0.3239092199968209,
+            "forecast_interval_coverage": 0.9208441840277778,
+            "accuracy": 0.9296875
+          },
+          "all": {
+            "forecast_mae": 0.22917847184482476,
+            "forecast_rmse": 0.3066786967964399,
+            "forecast_interval_coverage": 0.9046223958333334,
+            "accuracy": 1.0
+          }
+        },
+        "history16": {
+          "series": {
+            "forecast_mae": 0.38210838308707984,
+            "forecast_rmse": 0.48158640992277213,
+            "forecast_interval_coverage": 0.5231119791666666,
+            "accuracy": 0.779296875
+          },
+          "all": {
+            "forecast_mae": 0.368183462022052,
+            "forecast_rmse": 0.45861144273269855,
+            "forecast_interval_coverage": 0.54052734375,
+            "accuracy": 1.0
+          }
+        },
+        "history8": {
+          "series": {
+            "forecast_mae": 0.5428674890201187,
+            "forecast_rmse": 0.6768025119590989,
+            "forecast_interval_coverage": 0.2018771701388889,
+            "accuracy": 0.70703125
+          },
+          "all": {
+            "forecast_mae": 0.5304692355101932,
+            "forecast_rmse": 0.6652881893313746,
+            "forecast_interval_coverage": 0.2111545138888889,
+            "accuracy": 1.0
+          }
+        },
+        "missing10": {
+          "series": {
+            "forecast_mae": 0.24926047533779183,
+            "forecast_rmse": 0.34536966607038744,
+            "forecast_interval_coverage": 0.8946940104166666,
+            "accuracy": 0.92578125
+          },
+          "all": {
+            "forecast_mae": 0.2535758517054016,
+            "forecast_rmse": 0.3352305982990157,
+            "forecast_interval_coverage": 0.8868272569444444,
+            "accuracy": 1.0
+          }
+        },
+        "missing30": {
+          "series": {
+            "forecast_mae": 0.32017840058545566,
+            "forecast_rmse": 0.43289415792123126,
+            "forecast_interval_coverage": 0.8122287326388888,
+            "accuracy": 0.869140625
+          },
+          "all": {
+            "forecast_mae": 0.3280208154577622,
+            "forecast_rmse": 0.429076265350403,
+            "forecast_interval_coverage": 0.7956814236111112,
+            "accuracy": 1.0
+          }
+        },
+        "history16_missing30": {
+          "series": {
+            "forecast_mae": 0.47804567203622306,
+            "forecast_rmse": 0.6015010101215446,
+            "forecast_interval_coverage": 0.4382595486111111,
+            "accuracy": 0.759765625
+          },
+          "all": {
+            "forecast_mae": 0.4774772472559082,
+            "forecast_rmse": 0.5887882757524965,
+            "forecast_interval_coverage": 0.4217122395833333,
+            "accuracy": 1.0
+          }
+        },
+        "history8_missing30": {
+          "series": {
+            "forecast_mae": 0.5690546462166393,
+            "forecast_rmse": 0.7134202682028503,
+            "forecast_interval_coverage": 0.19325086805555555,
+            "accuracy": 0.701171875
+          },
+          "all": {
+            "forecast_mae": 0.5572674627783398,
+            "forecast_rmse": 0.7008266278540328,
+            "forecast_interval_coverage": 0.19140625,
+            "accuracy": 1.0
+          }
+        }
+      }
+    },
+    "length_gate": {
+      "fit": {
+        "method": "ridge",
+        "ridge": 0.001,
+        "examples": 2048,
+        "active_examples": 1152,
+        "observed_targets_by_horizon": [
+          3456,
+          3456,
+          3456,
+          3456,
+          3456,
+          3456,
+          3456,
+          3456,
+          3456,
+          3456,
+          3456,
+          3456
+        ],
+        "context": 8,
+        "amp": "none",
+        "features": "absolute",
+        "missing_gate": false,
+        "updated_parameters": 396
+      },
+      "cases": {
+        "complete": {
+          "series": {
+            "forecast_mae": 0.23218527402962585,
+            "forecast_rmse": 0.3239092199968209,
+            "forecast_interval_coverage": 0.9208441840277778,
+            "accuracy": 0.9296875
+          },
+          "all": {
+            "forecast_mae": 0.22917847184482476,
+            "forecast_rmse": 0.3066786967964399,
+            "forecast_interval_coverage": 0.9046223958333334,
+            "accuracy": 1.0
+          }
+        },
+        "history16": {
+          "series": {
+            "forecast_mae": 0.18870066780582168,
+            "forecast_rmse": 0.2777878412907511,
+            "forecast_interval_coverage": 0.8111436631944444,
+            "accuracy": 0.779296875
+          },
+          "all": {
+            "forecast_mae": 0.1738346030210146,
+            "forecast_rmse": 0.2474859250676682,
+            "forecast_interval_coverage": 0.8249240451388888,
+            "accuracy": 1.0
+          }
+        },
+        "history8": {
+          "series": {
+            "forecast_mae": 0.22044998479313765,
+            "forecast_rmse": 0.3178293754930683,
+            "forecast_interval_coverage": 0.5545789930555556,
+            "accuracy": 0.70703125
+          },
+          "all": {
+            "forecast_mae": 0.22409269741621707,
+            "forecast_rmse": 0.31902067736968404,
+            "forecast_interval_coverage": 0.53125,
+            "accuracy": 1.0
+          }
+        },
+        "missing10": {
+          "series": {
+            "forecast_mae": 0.24926047533779183,
+            "forecast_rmse": 0.34536966607038744,
+            "forecast_interval_coverage": 0.8946940104166666,
+            "accuracy": 0.92578125
+          },
+          "all": {
+            "forecast_mae": 0.2535758517054016,
+            "forecast_rmse": 0.3352305982990157,
+            "forecast_interval_coverage": 0.8868272569444444,
+            "accuracy": 1.0
+          }
+        },
+        "missing30": {
+          "series": {
+            "forecast_mae": 0.32017840058545566,
+            "forecast_rmse": 0.43289415792123126,
+            "forecast_interval_coverage": 0.8122287326388888,
+            "accuracy": 0.869140625
+          },
+          "all": {
+            "forecast_mae": 0.3280208154577622,
+            "forecast_rmse": 0.429076265350403,
+            "forecast_interval_coverage": 0.7956814236111112,
+            "accuracy": 1.0
+          }
+        },
+        "history16_missing30": {
+          "series": {
+            "forecast_mae": 0.29457422035300673,
+            "forecast_rmse": 0.40050849411286765,
+            "forecast_interval_coverage": 0.6423068576388888,
+            "accuracy": 0.759765625
+          },
+          "all": {
+            "forecast_mae": 0.26852684831478907,
+            "forecast_rmse": 0.3657707253219018,
+            "forecast_interval_coverage": 0.6661241319444444,
+            "accuracy": 1.0
+          }
+        },
+        "history8_missing30": {
+          "series": {
+            "forecast_mae": 0.35343994842811655,
+            "forecast_rmse": 0.48292874550329257,
+            "forecast_interval_coverage": 0.3687065972222222,
+            "accuracy": 0.701171875
+          },
+          "all": {
+            "forecast_mae": 0.3468270787288298,
+            "forecast_rmse": 0.47403091586343793,
+            "forecast_interval_coverage": 0.3688693576388889,
+            "accuracy": 1.0
+          }
+        }
+      }
+    },
+    "missing_gate": {
+      "fit": {
+        "method": "ridge",
+        "ridge": 0.001,
+        "examples": 2048,
+        "active_examples": 1728,
+        "observed_targets_by_horizon": [
+          5151,
+          5151,
+          5151,
+          5151,
+          5151,
+          5151,
+          5151,
+          5151,
+          5151,
+          5151,
+          5151,
+          5151
+        ],
+        "context": 8,
+        "amp": "none",
+        "features": "absolute",
+        "missing_gate": true,
+        "updated_parameters": 396
+      },
+      "cases": {
+        "complete": {
+          "series": {
+            "forecast_mae": 0.23218527402962585,
+            "forecast_rmse": 0.3239092199968209,
+            "forecast_interval_coverage": 0.9208441840277778,
+            "accuracy": 0.9296875
+          },
+          "all": {
+            "forecast_mae": 0.22917847184482476,
+            "forecast_rmse": 0.3066786967964399,
+            "forecast_interval_coverage": 0.9046223958333334,
+            "accuracy": 1.0
+          }
+        },
+        "history16": {
+          "series": {
+            "forecast_mae": 0.1814268291713006,
+            "forecast_rmse": 0.2727366647257097,
+            "forecast_interval_coverage": 0.8141818576388888,
+            "accuracy": 0.779296875
+          },
+          "all": {
+            "forecast_mae": 0.16584509155016905,
+            "forecast_rmse": 0.24383440436817438,
+            "forecast_interval_coverage": 0.8245985243055556,
+            "accuracy": 1.0
+          }
+        },
+        "history8": {
+          "series": {
+            "forecast_mae": 0.23934331939905304,
+            "forecast_rmse": 0.33527483999975577,
+            "forecast_interval_coverage": 0.5219184027777778,
+            "accuracy": 0.70703125
+          },
+          "all": {
+            "forecast_mae": 0.24053529186730632,
+            "forecast_rmse": 0.33500188086739463,
+            "forecast_interval_coverage": 0.5139431423611112,
+            "accuracy": 1.0
+          }
+        },
+        "missing10": {
+          "series": {
+            "forecast_mae": 0.241529228583128,
+            "forecast_rmse": 0.3386892882427305,
+            "forecast_interval_coverage": 0.892578125,
+            "accuracy": 0.92578125
+          },
+          "all": {
+            "forecast_mae": 0.2404752648383237,
+            "forecast_rmse": 0.32441745307949227,
+            "forecast_interval_coverage": 0.8879123263888888,
+            "accuracy": 1.0
+          }
+        },
+        "missing30": {
+          "series": {
+            "forecast_mae": 0.2851150407430825,
+            "forecast_rmse": 0.3992651353692032,
+            "forecast_interval_coverage": 0.82666015625,
+            "accuracy": 0.869140625
+          },
+          "all": {
+            "forecast_mae": 0.2823466258331564,
+            "forecast_rmse": 0.38550605957907613,
+            "forecast_interval_coverage": 0.8219943576388888,
+            "accuracy": 1.0
+          }
+        },
+        "history16_missing30": {
+          "series": {
+            "forecast_mae": 0.30989817788189256,
+            "forecast_rmse": 0.4189183232142215,
+            "forecast_interval_coverage": 0.6255425347222222,
+            "accuracy": 0.759765625
+          },
+          "all": {
+            "forecast_mae": 0.28327137769902794,
+            "forecast_rmse": 0.38586026062312007,
+            "forecast_interval_coverage": 0.64501953125,
+            "accuracy": 1.0
+          }
+        },
+        "history8_missing30": {
+          "series": {
+            "forecast_mae": 0.3597511896128683,
+            "forecast_rmse": 0.49003751975041526,
+            "forecast_interval_coverage": 0.3656684027777778,
+            "accuracy": 0.701171875
+          },
+          "all": {
+            "forecast_mae": 0.3556188556109671,
+            "forecast_rmse": 0.48383906625336953,
+            "forecast_interval_coverage": 0.3629557291666667,
+            "accuracy": 1.0
+          }
+        }
+      }
+    }
+  },
+  "scope": "Donn\u00e9es synth\u00e9tiques ; masquage ind\u00e9pendant des valeurs ; aucune garantie sur donn\u00e9es r\u00e9elles."
+}

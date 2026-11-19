@@ -18,7 +18,7 @@ Les [historiques courts et observations manquantes](ROBUSTNESS.md) couvrent l'au
 
 Les [statistiques temporelles](TEMPORAL_STATISTICS.md) ajoutent une projection optionnelle du niveau, de l'échelle et de la durée observée, ainsi qu'un transfert explicite vers des configurations compatibles.
 
-La [correction des prévisions courtes](FORECAST_REFINEMENT.md) ajuste une couche de 396 paramètres à partir des derniers pas de l'historique, en conservant les poids du modèle de base.
+La [correction des prévisions courtes](FORECAST_REFINEMENT.md) ajuste une couche de 396 paramètres à partir des derniers pas de l'historique, en conservant les poids du modèle de base. Une porte facultative peut aussi l'activer pour les variables partiellement observées ; les mesures montrent des compromis selon la longueur d'historique.
 
 La [prévision après changement de niveau ou d'unités](AFFINE_ROBUSTNESS.md) compare une augmentation affine et des caractéristiques relatives, avec un témoin ajusté sur les mêmes données.
 

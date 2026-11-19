@@ -12,6 +12,42 @@ La même translation est ajoutée à chaque quantile d'un horizon : leur ordre e
 
 Le défaut `forecast_adapter_context: 0` désactive le module. Son activation depuis un ancien checkpoint initialise les deux nouveaux tenseurs à zéro. Le chargement reste strict pour les autres poids. Changer explicitement sa taille réinitialise cette correction ; conserver sa taille recharge les coefficients appris.
 
+## Porte facultative pour les valeurs manquantes
+
+`forecast_adapter_missing_gate: true` permet aussi à la correction d'agir sur un historique de longueur complète contenant des valeurs manquantes. Pour chaque variable, la porte est le maximum de la porte de longueur habituelle et de la fraction de valeurs non finies parmi les positions valides. Une variable sans aucune observation reçoit une porte nulle ; le padding ne compte pas comme valeur manquante. Une variable complètement observée dans un historique d'au moins 32 positions reste inchangée. La correction utilise les mêmes caractéristiques et n'ajoute aucun paramètre.
+
+À l'ajustement, seules les variables dont la porte est strictement positive et dont la cible est finie contribuent à la régression de chaque horizon. Changer ce réglage sur un checkpoint existant réinitialise l'adaptateur pour éviter de réutiliser des coefficients ajustés pour une autre porte ; les autres poids sont conservés. Le défaut `false` conserve le comportement historique. La commande suivante active cette porte et ajuste de nouveaux coefficients :
+
+```bash
+.venv/bin/python -m chimera refine-forecast \
+  --checkpoint runs/joint-affine-pilot/control/latest.pt --data data/ajustement.jsonl \
+  --context 8 --missing-gate --output runs/forecast-missing-gate.pt
+```
+
+Sans `--missing-gate` ni `--no-missing-gate`, la commande conserve le réglage du parent. Les exemples d'ajustement doivent contenir des historiques représentatifs des trous rencontrés en utilisation. Un nouveau checkpoint nécessite une nouvelle calibration des intervalles sur des données réservées.
+
+### Mesure synthétique
+
+Un essai utilise le checkpoint `tiny` témoin du pilote joint-affine, après 180 étapes. Deux adaptateurs sont ajustés sur les mêmes 2 048 exemples de séries, avec des historiques complets, courts et masqués répartis en sept conditions. La porte historique ne reçoit des observations utiles que des historiques courts ; la nouvelle utilise aussi les historiques complets incomplets. Les 512 exemples de test par condition sont distincts de l'ajustement, avec un flux de masquage indépendant. La MAE médiane est plus basse lorsqu'elle est meilleure.
+
+| Historique | Séries : base | Séries : porte de longueur | Séries : porte de valeurs manquantes | Trois modalités : longueur | Trois modalités : valeurs manquantes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 32 pas complets | 0,2322 | 0,2322 | 0,2322 | 0,2292 | 0,2292 |
+| 32 pas, 10 % masqués | 0,2493 | 0,2493 | 0,2415 | 0,2536 | 0,2405 |
+| 32 pas, 30 % masqués | 0,3202 | 0,3202 | 0,2851 | 0,3280 | 0,2823 |
+| 16 pas | 0,3821 | 0,1887 | 0,1814 | 0,1738 | 0,1658 |
+| 8 pas | 0,5429 | 0,2204 | 0,2393 | 0,2241 | 0,2405 |
+| 16 pas, 30 % masqués | 0,4780 | 0,2946 | 0,3099 | 0,2685 | 0,2833 |
+| 8 pas, 30 % masqués | 0,5691 | 0,3534 | 0,3598 | 0,3468 | 0,3556 |
+
+La nouvelle porte réduit la MAE à 32 pas masqués mais la dégrade dans plusieurs conditions à historique court : le réglage reste donc optionnel et doit être comparé sur des données représentatives. Les masques sont ici indépendants des valeurs et les séries synthétiques ; ces mesures ne prouvent pas un gain sur des données réelles ou dont les absences dépendent des valeurs. L'essai utilise un seul checkpoint et un seul jeu d'ajustement. Les résultats, seeds et empreinte sont dans [missing-gate-study.json](artifacts/missing-gate-study.json). Reproduction :
+
+```bash
+.venv/bin/python tools/benchmark_missing_gate.py \
+  --checkpoint runs/joint-affine-pilot/control/latest.pt \
+  --output runs/missing-gate-study.json
+```
+
 ## Ajustement depuis un JSONL
 
 Chaque ligne contient `series` et `future`. Les historiques peuvent avoir des longueurs différentes et contenir `null` pour les valeurs absentes. D'autres modalités sont acceptées si elles sont présentes dans tout le fichier, comme pour les autres commandes JSONL.

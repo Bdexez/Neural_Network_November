@@ -98,7 +98,8 @@ def load_checkpoint(path, device="cpu", *, mmap=True, overrides=None):
         state.pop(statistics_key)
     adapter_keys = ("forecast_adapter.proj.weight", "forecast_adapter.proj.bias")
     if (config.forecast_adapter_context != original_config.forecast_adapter_context
-            or config.forecast_adapter_relative != original_config.forecast_adapter_relative):
+            or config.forecast_adapter_relative != original_config.forecast_adapter_relative
+            or config.forecast_adapter_missing_gate != original_config.forecast_adapter_missing_gate):
         if original_config.forecast_adapter_context:
             for key in adapter_keys:
                 state.pop(key)  # Refuser aussi un ancien adaptateur incomplet.

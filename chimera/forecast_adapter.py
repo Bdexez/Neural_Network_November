@@ -26,6 +26,7 @@ class ForecastAdapter(nn.Module):
         self.reference = config.forecast_context
         self.median_index = config.quantiles.index(0.5)
         self.relative = config.forecast_adapter_relative
+        self.missing_gate = config.forecast_adapter_missing_gate
         self.proj = nn.Linear(2 * self.context + 4 + config.forecast_horizon, config.forecast_horizon)
 
     def prepare(self, series, valid, mean, scale):
@@ -52,7 +53,11 @@ class ForecastAdapter(nn.Module):
         else:
             summary = torch.stack((mean.asinh(), scale.log(), anchor.asinh(), duration), dim=-1)
         history = torch.cat((normalized.transpose(1, 2), flags.float().transpose(1, 2), summary), dim=-1)
-        gate = (1 - length / self.reference).clamp(0, 1)
+        gate = (1 - length / self.reference).clamp(0, 1)[:, None].expand_as(mean)
+        if self.missing_gate:
+            count = observed.sum(1)
+            missing_fraction = 1 - count / length[:, None]
+            gate = torch.where(count > 0, torch.maximum(gate, missing_fraction), 0)
         return ForecastAdapterContext(history, anchor, scale, gate)
 
     def features(self, forecast, context):
@@ -61,12 +66,12 @@ class ForecastAdapter(nn.Module):
         return torch.cat((context.history, previous), dim=-1)
 
     def forward(self, forecast, context):
-        active = context.gate > 0
+        active = (context.gate > 0).any(-1)
         if not active.any():
             return forecast
         features = self.features(forecast, context)[active]
         update = self.proj(features.to(self.proj.weight.dtype)).transpose(1, 2)
-        update = update * context.scale[active, None] * context.gate[active, None, None]
+        update = update * context.scale[active, None] * context.gate[active, None]
         correction = forecast.new_zeros(forecast.shape[:-1])
         correction[active] = update.to(correction.dtype)
         # Une translation commune conserve l'ordre des quantiles et n'intervient
@@ -119,23 +124,24 @@ def fit_forecast_adapter(model, batches, *, ridge=0.001, amp="none"):
                 features = adapter.features(forecast, context)
                 if not torch.isfinite(forecast).all() or not torch.isfinite(features).all():
                     raise ValueError("Prévisions et caractéristiques finies requises pour l'ajustement")
-                active = context.gate > 0
+                active = (context.gate > 0).any(-1)
                 examples += target.size(0)
                 active_examples += active.sum().item()
                 features = features[active].double().cpu()
                 features = torch.cat((features, torch.ones(*features.shape[:2], 1, dtype=torch.float64)), dim=-1)
-                multiplier = (context.scale[active] * context.gate[active, None]).double().cpu()
+                multiplier = (context.scale[active] * context.gate[active]).double().cpu()
                 design = (features * multiplier[..., None]).reshape(-1, dimension)
                 residual = (target.double() - forecast[..., adapter.median_index].double()).transpose(1, 2)[active].cpu()
                 residual = residual.reshape(-1, horizon)
+                active_variables = (context.gate[active] > 0).reshape(-1).cpu()
                 for step in range(horizon):
-                    observed = torch.isfinite(residual[:, step])
+                    observed = torch.isfinite(residual[:, step]) & active_variables
                     x, y = design[observed], residual[observed, step]
                     gram[step].add_(x.T @ x)
                     cross[step].add_(x.T @ y)
                     counts[step] += observed.sum()
         if (counts == 0).any():
-            raise ValueError("Chaque horizon doit avoir une cible observée avec un historique plus court que forecast_context")
+            raise ValueError("Chaque horizon doit avoir une cible observée avec un historique plus court que forecast_context ou incomplet si la porte de valeurs manquantes est active")
         penalty = torch.eye(dimension, dtype=torch.float64) * ridge
         penalty[-1, -1] = 0
         coefficients = torch.linalg.solve(gram / counts[:, None, None] + penalty,
@@ -150,6 +156,7 @@ def fit_forecast_adapter(model, batches, *, ridge=0.001, amp="none"):
         return dict(method="ridge", ridge=ridge, examples=examples, active_examples=active_examples,
                     observed_targets_by_horizon=counts.tolist(), context=adapter.context, amp=amp,
                     features="relative" if adapter.relative else "absolute",
+                    missing_gate=adapter.missing_gate,
                     updated_parameters=sum(p.numel() for p in adapter.parameters()))
     finally:
         hook.remove()

@@ -38,6 +38,97 @@ class ForecastAdapterTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             replace(config, forecast_adapter_relative=1)
 
+    def test_missing_gate_acts_per_variable_and_respects_empty_history_and_padding(self):
+        config = replace(ChimeraConfig.preset("tiny"), forecast_adapter_context=8,
+                         forecast_adapter_missing_gate=True)
+        model = Chimera(config).eval()
+        with torch.no_grad():
+            model.forecast_adapter.proj.weight.zero_()
+            model.forecast_adapter.proj.bias.fill_(1)
+        batch = synthetic_batch(config, batch_size=2, seed=749)
+        series = batch["series"].clone()
+        series[:, :8, 0] = float("nan")
+        series[:, :, 1] = float("nan")
+        valid = batch["series_mask"]
+        with torch.inference_mode():
+            _, _, mean, scale, _ = model.temporal(series, valid)
+            context = model.forecast_adapter.prepare(series, valid, mean, scale)
+            torch.testing.assert_close(context.gate, torch.tensor([[0.25, 0, 0], [0.25, 0, 0]]))
+            before = torch.zeros(2, config.forecast_horizon, 3, 3)
+            after = model.forecast_adapter(before, context)
+            self.assertTrue((after[:, :, 0] > 0).all())
+            self.assertEqual(after[:, :, 1:].count_nonzero().item(), 0)
+            padded = torch.nn.functional.pad(series, (0, 0, 5, 4), value=1234)
+            mask = torch.nn.functional.pad(valid, (5, 4), value=False)
+            _, _, mean2, scale2, _ = model.temporal(padded, mask)
+            padded_context = model.forecast_adapter.prepare(padded, mask, mean2, scale2)
+            torch.testing.assert_close(context.gate, padded_context.gate)
+            torch.testing.assert_close(after, model.forecast_adapter(before, padded_context), rtol=2e-5, atol=2e-6)
+        with self.assertRaises(ValueError):
+            replace(config, forecast_adapter_missing_gate=1)
+
+    def test_missing_gate_fits_only_active_variables_and_preserves_clean_forecast(self):
+        config = replace(ChimeraConfig.preset("tiny"), forecast_adapter_context=8,
+                         forecast_adapter_missing_gate=True)
+        model = Chimera(config).eval()
+        training = synthetic_batch(config, batch_size=16, seed=750)
+        training["series"][:, :8, 0] = float("nan")
+        training["series"][:, :, 1] = float("nan")
+        training["forecast_targets"][0, 2, 0] = float("nan")
+        clean = synthetic_batch(config, batch_size=3, seed=751)
+        with torch.inference_mode():
+            before = model(series=clean["series"]).forecast
+        report = fit_forecast_adapter(model, [training])
+        self.assertEqual(report["active_examples"], 16)
+        self.assertEqual(report["observed_targets_by_horizon"][0], 16)
+        self.assertEqual(report["observed_targets_by_horizon"][2], 15)
+        self.assertTrue(report["missing_gate"])
+        with torch.inference_mode():
+            after = model(series=clean["series"]).forecast
+        torch.testing.assert_close(before, after, rtol=0, atol=0)
+
+    def test_changing_missing_gate_resets_only_adapter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "base.pt"
+            config = replace(ChimeraConfig.preset("tiny"), forecast_adapter_context=8)
+            original = Chimera(config)
+            torch.nn.init.normal_(original.forecast_adapter.proj.weight)
+            save_checkpoint(path, original)
+            changed, _ = load_checkpoint(path, overrides={"forecast_adapter_missing_gate": True})
+            self.assertTrue(changed.forecast_adapter.missing_gate)
+            self.assertEqual(changed.forecast_adapter.proj.weight.count_nonzero().item(), 0)
+            for name, value in original.state_dict().items():
+                if not name.startswith("forecast_adapter."):
+                    torch.testing.assert_close(value, changed.state_dict()[name], rtol=0, atol=0)
+            torch.nn.init.ones_(changed.forecast_adapter.proj.bias)
+            save_checkpoint(path, changed)
+            restored, _ = load_checkpoint(path, overrides={"forecast_adapter_missing_gate": False})
+            self.assertFalse(restored.forecast_adapter.missing_gate)
+            self.assertEqual(restored.forecast_adapter.proj.bias.count_nonzero().item(), 0)
+
+    def test_missing_gate_supports_cached_context_and_bf16_training(self):
+        config = replace(ChimeraConfig.preset("tiny"), forecast_adapter_context=8,
+                         forecast_adapter_relative=True, forecast_adapter_missing_gate=True,
+                         gradient_checkpointing=True)
+        model = Chimera(config)
+        torch.nn.init.normal_(model.forecast_adapter.proj.weight, std=0.03)
+        batch = synthetic_batch(config, batch_size=3, seed=752)
+        batch["series"][:, ::3, 0] = float("nan")
+        batch["series"][:, :, 1] = float("nan")
+        ids = batch["input_ids"][:, :8]
+        model.eval()
+        with torch.inference_mode(), torch.autocast("cpu", dtype=torch.bfloat16):
+            full = model(ids, series=batch["series"])
+            prefix = model(ids[:, :4], series=batch["series"], use_cache=True)
+            cached = model(ids[:, 4:], cache=prefix.cache, use_cache=True)
+        torch.testing.assert_close(full.forecast, cached.forecast, rtol=0.02, atol=0.01)
+        self.assertTrue(torch.isfinite(full.forecast).all())
+        model.train()
+        with torch.autocast("cpu", dtype=torch.bfloat16):
+            output = model(series=batch["series"], forecast_targets=batch["forecast_targets"])
+        output.loss.backward()
+        self.assertTrue(torch.isfinite(model.forecast_adapter.proj.weight.grad).all())
+
     def test_changing_feature_semantics_resets_only_adapter_and_roundtrips_cache(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "absolute.pt"

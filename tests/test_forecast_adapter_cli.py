@@ -2,6 +2,8 @@ from contextlib import redirect_stderr, redirect_stdout
 import io
 import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -16,6 +18,27 @@ from tools.benchmark_calibration import main as benchmark_calibration
 
 
 class ForecastAdapterCliTests(unittest.TestCase):
+    def test_missing_gate_benchmark_validates_inputs_and_preserves_checkpoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkpoint, report = root / "model.pt", root / "report.json"
+            save_checkpoint(checkpoint, Chimera(ChimeraConfig.preset("tiny")))
+            original = checkpoint.read_bytes()
+            common = [sys.executable, "tools/benchmark_missing_gate.py", "--checkpoint", str(checkpoint),
+                      "--train-batches", "7", "--test-batches", "1", "--batch-size", "4"]
+            result = subprocess.run([*common, "--output", str(report)], capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(report.read_text())
+            self.assertEqual(payload["checkpoint_sha256"], file_sha256(checkpoint))
+            self.assertEqual(payload["measurements"]["missing_gate"]["fit"]["examples"], 28)
+            self.assertTrue(payload["measurements"]["missing_gate"]["fit"]["missing_gate"])
+            self.assertIn("missing30", payload["measurements"]["missing_gate"]["cases"])
+            for extra in (("--test-seed", "22000001", "--output", str(report)),
+                          ("--output", str(checkpoint))):
+                result = subprocess.run([*common, *extra], capture_output=True, text=True, timeout=60)
+                self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(checkpoint.read_bytes(), original)
+
     def test_calibration_benchmark_uses_disjoint_short_masked_histories(self):
         with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             root = Path(directory)
@@ -56,7 +79,8 @@ class ForecastAdapterCliTests(unittest.TestCase):
             self.assertTrue(any(value is None for row in rows for step in row["series"] for value in step))
             self.assertTrue(all(set(row) == {"series", "future"} for row in rows))
             args = ["--threads", "2", "refine-forecast", "--checkpoint", str(source), "--data", str(data),
-                    "--batch-size", "16", "--output", str(output), "--report", str(report), "--relative-features"]
+                    "--batch-size", "16", "--output", str(output), "--report", str(report), "--relative-features",
+                    "--missing-gate"]
             main(args)
             fitted, payload = load_checkpoint(output)
             fit = json.loads(report.read_text())
@@ -71,6 +95,8 @@ class ForecastAdapterCliTests(unittest.TestCase):
             self.assertEqual(fit["updated_parameters"], 396)
             self.assertEqual(fit["features"], "relative")
             self.assertTrue(fitted.forecast_adapter.relative)
+            self.assertTrue(fitted.forecast_adapter.missing_gate)
+            self.assertTrue(fit["missing_gate"])
             for name, value in original.state_dict().items():
                 torch.testing.assert_close(fitted.state_dict()[name], value, rtol=0, atol=0)
             predictions = root / "predictions.jsonl"

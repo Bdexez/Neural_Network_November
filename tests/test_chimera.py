@@ -326,6 +326,17 @@ class ChimeraTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "vide"):
             collate_records([])
 
+    def test_training_rejects_a_batch_without_observed_targets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "unlabeled.jsonl"
+            path.write_text(json.dumps(dict(series=[[1, 2, 3]], class_label=-100)))
+            for policy in ("dropout", "balanced"):
+                with self.subTest(policy=policy), redirect_stdout(io.StringIO()):
+                    with self.assertRaisesRegex(ValueError, "aucune cible supervisée observée"):
+                        main(["--threads", "2", "train", "--preset", "tiny", "--data", str(path),
+                              "--steps", "1", "--batch-size", "1", "--modality-policy", policy,
+                              "--output", str(Path(directory) / policy)])
+
     @unittest.skipUnless(importlib.util.find_spec("PIL"), "Installer l'extra vision pour tester PNG/JPEG")
     def test_png_loading_resizes_and_normalizes(self):
         from PIL import Image

@@ -17,7 +17,7 @@ from .config import ChimeraConfig
 from .augmentation import SeriesAffineAugmentation, SeriesAugmentation
 from .data import JointDataset, collate_records, synthetic_batch
 from .model import Chimera
-from .modalities import MODALITIES, TARGETS, balanced_modalities, keep_modalities
+from .modalities import MODALITIES, balanced_modalities, has_observed_targets, keep_modalities
 from .evaluation import evaluate
 from .modules import RotaryEmbedding
 
@@ -100,15 +100,15 @@ def learning_rate(step, total_steps, peak, warmup):
     return peak * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * min(progress, 1))))
 
 
-def drop_modalities(batch, probability):
+def drop_modalities(batch, probability, *, prediction_steps=1):
     """Apprendre aussi avec des modalités absentes, sans supprimer toutes les entrées."""
     names = [name for name in MODALITIES if name in batch]
     kept = [name for name in names if random.random() >= probability]
     if not kept:
         kept = [random.choice(names)]
     result = keep_modalities(batch, kept)
-    # Un corpus ne contenant que du texte doit conserver ses cibles.
-    if not any(name in result for name in TARGETS):
+    # Les champs présents peuvent ne contenir que des cibles ignorées.
+    if not has_observed_targets(result, prediction_steps=prediction_steps):
         return batch
     return result
 
@@ -285,10 +285,12 @@ def train(args, config):
                 batch = {key: value.to(device) for key, value in batch.items()}
             index = (step * args.accumulation + micro) * world + rank
             batch = augment_series(batch, index=index, seed=args.seed)
+            if not has_observed_targets(batch, prediction_steps=config.prediction_steps):
+                raise ValueError("Le batch ne contient aucune cible supervisée observée")
             if args.modality_policy == "balanced":
-                batch = balanced_modalities(batch, index, args.seed)
+                batch = balanced_modalities(batch, index, args.seed, prediction_steps=config.prediction_steps)
             elif args.modality_dropout:
-                batch = drop_modalities(batch, args.modality_dropout)
+                batch = drop_modalities(batch, args.modality_dropout, prediction_steps=config.prediction_steps)
             # Le futur ne doit changer d'unités que si l'historique permettant
             # de connaître ces unités est encore présent dans les entrées.
             original_series = batch.get("series")

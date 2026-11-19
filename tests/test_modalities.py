@@ -1,10 +1,12 @@
 import itertools
 import random
 import unittest
+from unittest.mock import patch
 
 import torch
 
-from chimera.modalities import MODALITIES, balanced_modalities, keep_modalities
+from chimera.modalities import MODALITIES, balanced_modalities, has_observed_targets, keep_modalities
+from chimera.training import drop_modalities
 
 
 class ModalityTests(unittest.TestCase):
@@ -12,6 +14,8 @@ class ModalityTests(unittest.TestCase):
         self.batch = {name: torch.tensor([1]) for name in
                       (*MODALITIES, "labels", "attention_mask", "series_mask",
                        "class_labels", "forecast_targets")}
+        self.batch["labels"] = torch.tensor([[1, 2]])
+        self.batch["attention_mask"] = torch.ones(1, 2, dtype=torch.bool)
 
     @staticmethod
     def signature(batch):
@@ -63,6 +67,26 @@ class ModalityTests(unittest.TestCase):
         kept = keep_modalities(self.batch, ("series",))
         self.assertIs(kept["series"], self.batch["series"])
         self.assertIs(kept["forecast_targets"], self.batch["forecast_targets"])
+
+    def test_missing_targets_do_not_remove_the_only_supervised_modality(self):
+        batch = dict(self.batch, class_labels=torch.tensor([-100]),
+                     forecast_targets=torch.tensor([float("nan")]))
+        expected = {subset for n in range(1, 4) for subset in itertools.combinations(MODALITIES, n)
+                    if "input_ids" in subset}
+        self.assertEqual({self.signature(balanced_modalities(batch, i)) for i in range(4)}, expected)
+        with patch("chimera.training.random.random", side_effect=(0.0, 1.0, 1.0)):
+            self.assertIn("input_ids", drop_modalities(batch, 0.5))
+        batch["labels"].fill_(-100)
+        self.assertFalse(has_observed_targets(batch))
+        with self.assertRaisesRegex(ValueError, "cible supervisée"):
+            balanced_modalities(batch, 0)
+
+    def test_auxiliary_future_target_counts_only_for_available_distance(self):
+        batch = {"input_ids": torch.tensor([[1, 0, 2]]), "labels": torch.tensor([[-100, -100, 2]]),
+                 "attention_mask": torch.tensor([[1, 0, 1]])}
+        self.assertFalse(has_observed_targets(batch, prediction_steps=1))
+        self.assertTrue(has_observed_targets(batch, prediction_steps=2))
+        self.assertIn("input_ids", balanced_modalities(batch, 0, prediction_steps=2))
 
 
 if __name__ == "__main__":

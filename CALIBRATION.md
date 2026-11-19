@@ -40,16 +40,46 @@ Par défaut, `--scope marginal` conserve une portée marginale par cible, sous �
 
 `--scope joint` propose une autre cible : couvrir simultanément tous les horizons et variables d'une trajectoire. Pour chaque exemple complet, le score est le maximum des scores CQR sur toutes ses coordonnées ; une correction commune est choisie au même rang conformel, puis appliquée à toutes les bornes. L'utilisation d'un score maximal pour une région couvrant une trajectoire est une approche de [prédiction conformelle multivariée](https://ojs.aaai.org/index.php/AAAI/article/download/30089/31918). Les coordonnées de grandes unités peuvent dominer ce score et rendre les autres intervalles larges.
 
-Seules les trajectoires dont toutes les cibles sont finies contribuent à cet ajustement ; l'effectif commun est enregistré dans `counts`. La garantie de couverture simultanée suppose notamment un modèle fixé avant calibration et l'échangeabilité des trajectoires complètes de calibration avec les trajectoires futures concernées. L'exclusion de cibles manquantes ne garantit pas ces hypothèses si leur présence dépend des valeurs ; aucune garantie n'est revendiquée pour une population différente ou une série temporelle non échangeable. Le fichier joint utilise le format version 2 ; les fichiers marginaux version 1 restent lisibles.
+Seules les trajectoires dont toutes les cibles sont finies contribuent à cet ajustement ; l'effectif commun est enregistré dans `counts`. La garantie de couverture simultanée suppose notamment un modèle fixé avant calibration et l'échangeabilité des trajectoires complètes de calibration avec les trajectoires futures concernées. L'exclusion de cibles manquantes ne garantit pas ces hypothèses si leur présence dépend des valeurs ; aucune garantie n'est revendiquée pour une population différente ou une série temporelle non échangeable. Le fichier joint sans normalisation utilise le format version 2 ; les fichiers marginaux version 1 restent lisibles.
 
 ```bash
 .venv/bin/python -m chimera calibrate --checkpoint runs/workstation-refined/model.pt \
   --data data/calibration.jsonl --coverage 0.8 --scope joint --output runs/joint-calibration.json
 ```
 
+Pour des variables d'unités très différentes, `--scope joint --score-scale width` divise chaque score CQR par `max(borne_haute - borne_basse, plancher)` avant de prendre le maximum. La correction commune est ensuite multipliée par cette même largeur à chaque coordonnée. La normalisation dépend uniquement des prédictions ; sous les mêmes hypothèses d'échangeabilité, le raisonnement conformel s'applique au score ainsi construit. Les [résidus multivariés standardisés](https://arxiv.org/abs/2507.20941) illustrent plus généralement l'intérêt des scores adaptés à l'échelle. Cette option ne garantit ni une meilleure efficacité sur chaque jeu de données ni une couverture conditionnelle.
+
+Le plancher `--scale-floor` est strictement positif et vaut `1e-6` par défaut. Choisir une valeur adaptée aux unités si les largeurs prédites peuvent être très petites. Tant que le plancher n'est pas actif, le résultat de calibration suit les changements positifs d'unité appliqués aux prévisions et aux cibles ; lorsqu'il est actif, cette propriété peut ne plus tenir. Les fichiers correspondants utilisent le format version 3 et enregistrent le plancher. Les sorties indiquent `calibrated_score_scale` et, pour cette option, `calibrated_scale_floor`.
+
+```bash
+.venv/bin/python -m chimera calibrate --checkpoint runs/workstation-refined/model.pt \
+  --data data/calibration.jsonl --coverage 0.8 --scope joint --score-scale width \
+  --scale-floor 1e-6 --output runs/joint-width-calibration.json
+```
+
 L'évaluation ajoute `forecast_complete_examples`, `forecast_joint_interval_coverage` et `calibrated_joint_interval_coverage` : une trajectoire compte comme couverte si toutes ses coordonnées sont dans leurs intervalles. Les exemples incomplets sont exclus de ce seul diagnostic ; les métriques marginales continuent à utiliser toutes les cibles observées. Une absence de trajectoire complète donne une couverture jointe `null`. Pour `scope: "joint"`, la couverture nominale désigne la trajectoire entière ; le score marginal d'intervalle calibré vaut `null`, car cette cible ne définit pas un niveau nominal par coordonnée.
 
-L'évaluation affiche couverture et largeur, globalement et par horizon. Elle ajoute aussi le [score d'intervalle de Gneiting et Raftery](https://sites.stat.washington.edu/raftery/Research/PDF/Gneiting2007jasa.pdf), orienté vers les petites valeurs : `largeur + 2/(1-c) × erreurs hors intervalle`. C'est le score d'un intervalle central de niveau `c`, y compris lorsque les quantiles de départ sont asymétriques. Il pénalise à la fois les intervalles trop larges et les observations manquées. Comparer les scores à couverture nominale identique.
+L'évaluation affiche couverture et largeur, globalement et par horizon, ainsi que la largeur par variable (`forecast_interval_width_by_feature` et `calibrated_interval_width_by_feature`). Elle ajoute aussi le [score d'intervalle de Gneiting et Raftery](https://sites.stat.washington.edu/raftery/Research/PDF/Gneiting2007jasa.pdf), orienté vers les petites valeurs : `largeur + 2/(1-c) × erreurs hors intervalle`. C'est le score d'un intervalle central de niveau `c`, y compris lorsque les quantiles de départ sont asymétriques. Il pénalise à la fois les intervalles trop larges et les observations manquées. Comparer les scores à couverture nominale identique.
+
+## Comparaison avec des échelles différentes
+
+Un second essai utilise le checkpoint `tiny` du contrôle joint-affine après 180 étapes et multiplie les trois variables de séries et leurs cibles par 0,1, 1 et 10. Il utilise 512 trajectoires de calibration (seeds 6100000 à 6100031) et 512 trajectoires de test distinctes (7100000 à 7100031), pour une cible de 80 %. La largeur moyenne agrège des variables exprimées ici à des échelles différentes ; les largeurs par variable montrent mieux les compromis.
+
+| Modalités | Méthode jointe | Couverture de trajectoire | Largeur moyenne | Largeurs par variable |
+| --- | --- | ---: | ---: | --- |
+| Séries seules | Sans normalisation | 83,98 % | 7,632 | 3,713 ; 4,681 ; 14,502 |
+| Séries seules | Par largeur | 79,49 % | 7,442 | 0,201 ; 1,989 ; 20,136 |
+| Trois modalités | Sans normalisation | 83,20 % | 7,103 | 3,187 ; 4,146 ; 13,976 |
+| Trois modalités | Par largeur | 80,86 % | 7,007 | 0,189 ; 1,857 ; 18,974 |
+
+Dans cet essai, la normalisation réduit fortement la largeur des deux premières variables, mais augmente celle de la troisième. Les couvertures observées varient autour de la cible ; elles ne démontrent pas à elles seules une garantie pour d'autres données. Un seul checkpoint et des données synthétiques ont été utilisés. Les mesures complètes et l'empreinte sont dans [scaled-joint-calibration-study.json](artifacts/scaled-joint-calibration-study.json). Reproduction :
+
+```bash
+.venv/bin/python tools/benchmark_joint_calibration.py \
+  --checkpoint runs/joint-affine-pilot/control/latest.pt \
+  --calibration-seed 6100000 --test-seed 7100000 --feature-scales 0.1 1 10 \
+  --output runs/scaled-joint-calibration-study.json
+```
 
 ## Comparaison simultanée sur données synthétiques
 

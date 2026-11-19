@@ -1,6 +1,7 @@
 from array import array
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import torch
@@ -26,6 +27,10 @@ def numeric_tensor(values):
     return torch.tensor(convert(values), dtype=torch.float32)
 
 
+def file_identity(stat):
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+
 class JointDataset(Dataset):
     """JSONL local : texte, image, historique et cibles, sans téléchargement implicite."""
 
@@ -36,6 +41,7 @@ class JointDataset(Dataset):
         self.offsets, self.line_numbers = array("Q"), array("Q")
         signature = None
         digest = hashlib.sha256()
+        image_lines = {}
         with self.path.open("rb") as stream:
             line_number = 0
             while True:
@@ -60,11 +66,35 @@ class JointDataset(Dataset):
                 if signature is not None and current != signature:
                     raise ValueError(f"{self.path}:{line_number}: les modalités doivent être identiques dans le fichier")
                 signature = current
+                if "image_path" in record and "image" not in record:
+                    image_path = record["image_path"]
+                    if not isinstance(image_path, str) or not image_path:
+                        raise ValueError(f"{self.path}:{line_number}: image_path doit être une chaîne non vide")
+                    image_lines.setdefault(image_path, line_number)
                 self.offsets.append(offset)
                 self.line_numbers.append(line_number)
         if not self.offsets:
             raise ValueError("Le fichier JSONL ne contient aucun exemple")
         self.fingerprint = digest.hexdigest()
+        self._image_identities = {}
+        image_digests = {}
+        for name, line_number in image_lines.items():
+            image_path = self.path.parent / name
+            try:
+                image_digest = hashlib.sha256()
+                with image_path.open("rb") as image_stream:
+                    before = file_identity(os.fstat(image_stream.fileno()))
+                    for chunk in iter(lambda: image_stream.read(1024 * 1024), b""):
+                        image_digest.update(chunk)
+                    after = file_identity(os.fstat(image_stream.fileno()))
+                if before != after or after != file_identity(image_path.stat()):
+                    raise ValueError(f"L'image a changé pendant son indexation : {image_path}")
+            except (OSError, ValueError) as exc:
+                raise ValueError(f"{self.path}:{line_number}: {exc}") from exc
+            self._image_identities[name] = after
+            image_digests[name] = image_digest.hexdigest()
+        manifest = json.dumps(image_digests, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+        self.image_fingerprint = hashlib.sha256(manifest.encode("ascii")).hexdigest() if image_digests else None
         self._stat = self.path.stat()
         if (self._stat.st_size, self._stat.st_mtime_ns) != (initial_stat.st_size, initial_stat.st_mtime_ns):
             raise ValueError(f"Le jeu de données a changé pendant son indexation : {self.path}")
@@ -104,10 +134,14 @@ class JointDataset(Dataset):
             path = self.path.parent / record["image_path"]
             if self.config.image_channels not in (1, 3):
                 raise ValueError("image_path prend en charge image_channels=1 ou 3 ; utiliser image sinon")
+            if file_identity(path.stat()) != self._image_identities[record["image_path"]]:
+                raise ValueError(f"L'image a changé après son indexation : {path}")
             with Image.open(path) as source:
                 mode = "RGB" if self.config.image_channels == 3 else "L"
                 image = source.convert(mode).resize((self.config.image_size,) * 2)
                 pixels = torch.frombuffer(bytearray(image.tobytes()), dtype=torch.uint8)
+            if file_identity(path.stat()) != self._image_identities[record["image_path"]]:
+                raise ValueError(f"L'image a changé pendant sa lecture : {path}")
             item["images"] = pixels.view(self.config.image_size, self.config.image_size, -1).permute(2, 0, 1).float() / 255
         if "series" in record:
             item["series"] = numeric_tensor(record["series"])

@@ -167,7 +167,7 @@ Reprise exacte sur un processus, en conservant les mêmes arguments de planning 
   --resume runs/resumable/latest.pt --output runs/resumable
 ```
 
-La suite de tests compare les poids d'une exécution continue et d'une reprise avec dropout, accumulation, mélange des données et arrêt anticipé : ils doivent être identiques bit à bit. Les empreintes SHA-256 des JSONL d'entraînement et de validation sont conservées dans les nouveaux checkpoints et vérifiées à la reprise. Les fichiers d'images externes référencés par `image_path` doivent également rester identiques ; leur contenu n'entre pas dans l'empreinte du JSONL.
+La suite de tests compare les poids d'une exécution continue et d'une reprise avec dropout, accumulation, mélange des données et arrêt anticipé : ils doivent être identiques bit à bit. Les empreintes SHA-256 des JSONL d'entraînement et de validation sont conservées dans les nouveaux checkpoints et vérifiées à la reprise. Une empreinte distincte couvre le contenu des images externes référencées par `image_path` ; une modification détectée empêche la reprise. Les anciens checkpoints restent utilisables avec un avertissement si leur empreinte d'images manque.
 
 Pour adapter des poids existants avec un nouvel optimiseur, un nouveau planning et de nouvelles données :
 
@@ -200,7 +200,7 @@ Les configurations dépassant la mémoire d'un accélérateur nécessitent un sy
 
 Un fichier JSONL contient un objet par ligne. Les champs de modalités doivent être cohérents dans un même fichier ; chaque modalité est facultative, mais au moins une est requise. Les champs `class_label` et `future` peuvent être omis pour certains exemples : leurs cibles sont alors ignorées dans les pertes et les mesures. Chaque lot d'entraînement doit toutefois contenir au moins une cible supervisée observée ; avec peu d'annotations, adapter la taille des lots ou la composition du jeu pour respecter cette contrainte.
 
-Le lecteur indexe les positions des lignes et charge les exemples à la demande : il garde environ 16 octets d'index par exemple, au lieu de conserver tous les tableaux Python. Le fichier est parcouru une fois à l'ouverture pour valider les modalités et calculer son empreinte. Les erreurs de conversion indiquent le fichier et la ligne. La commande `predict` écrit les résultats progressivement et remplace son fichier de sortie uniquement après une exécution réussie.
+Le lecteur indexe les positions des lignes et charge les exemples à la demande : il garde environ 16 octets d'index par exemple, au lieu de conserver tous les tableaux Python. Le fichier est parcouru une fois à l'ouverture pour valider les modalités et calculer son empreinte. Chaque image externe distincte est lue une fois pour calculer son empreinte, ce qui ajoute un coût d'ouverture et un index en mémoire proportionnel au nombre de chemins d'images distincts. Le lecteur vérifie aussi l'identité des fichiers d'image avant et après leur décodage. Les erreurs indiquent le fichier et la ligne. La commande `predict` écrit les résultats progressivement et remplace son fichier de sortie uniquement après une exécution réussie.
 
 | Champ | Contenu |
 | --- | --- |

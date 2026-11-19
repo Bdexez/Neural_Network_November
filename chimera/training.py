@@ -239,10 +239,16 @@ def train(args, config):
     validation = JointDataset(args.val_data, config) if args.val_data else None
     trainer["data_fingerprint"] = dataset.fingerprint if dataset is not None else None
     trainer["validation_fingerprint"] = validation.fingerprint if validation is not None else None
+    trainer["data_images_fingerprint"] = dataset.image_fingerprint if dataset is not None else None
+    trainer["validation_images_fingerprint"] = validation.image_fingerprint if validation is not None else None
     if args.resume:
         for name, current in trainer.items():
             if name in previous and previous[name] != current:
                 raise ValueError(f"Reprise : {name} diffère du checkpoint ({previous[name]!r})")
+            if (name in ("data_images_fingerprint", "validation_images_fingerprint") and name not in previous
+                    and current is not None and rank == 0):
+                warnings.warn(f"Checkpoint ancien : {name} absent, le contenu initial des images est invérifiable.",
+                              RuntimeWarning)
     initial_best = float("-inf") if maximize else float("inf")
     state = dict(previous.get("validation_state", {"best_loss": initial_best, "bad_evaluations": 0, "best_step": None}))
     trainer["validation_state"] = state

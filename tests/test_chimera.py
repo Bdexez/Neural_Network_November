@@ -371,6 +371,46 @@ class ChimeraTests(unittest.TestCase):
             self.assertEqual(item["images"][1:].abs().sum().item(), 0)
             self.assertTrue(torch.isfinite(self.model(**collate_records([item])).loss))
 
+    @unittest.skipUnless(importlib.util.find_spec("PIL"), "Installer l'extra vision pour tester PNG/JPEG")
+    def test_external_image_changes_are_detected_during_reading_and_resume(self):
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
+            root = Path(directory)
+            image = root / "image.png"
+            Image.new("RGB", (8, 8), "red").save(image)
+            data = root / "train.jsonl"
+            data.write_text("\n".join(json.dumps(dict(image_path="image.png", class_label=i)) for i in (0, 1)))
+            dataset = JointDataset(data, self.config)
+            self.assertIsNotNone(dataset.image_fingerprint)
+            self.assertEqual(len(dataset._image_identities), 1)
+            self.assertEqual(dataset.image_fingerprint, JointDataset(data, self.config).image_fingerprint)
+            checkpoint = root / "run" / "latest.pt"
+            common = ["--threads", "2", "train", "--preset", "tiny", "--steps", "2", "--batch-size", "2",
+                      "--data", str(data), "--output", str(root / "run")]
+            main(common + ["--stop-after", "1"])
+            payload = torch.load(checkpoint, weights_only=True)
+            self.assertEqual(payload["trainer"]["data_images_fingerprint"], dataset.image_fingerprint)
+            legacy = root / "legacy.pt"
+            del payload["trainer"]["data_images_fingerprint"]
+            torch.save(payload, legacy)
+            Image.new("RGB", (8, 8), "blue").save(image)
+            with self.assertRaisesRegex(ValueError, "image a changé"):
+                dataset[0]
+            self.assertNotEqual(dataset.image_fingerprint, JointDataset(data, self.config).image_fingerprint)
+            with self.assertRaisesRegex(ValueError, "data_images_fingerprint"):
+                main(common + ["--resume", str(checkpoint)])
+            with self.assertWarnsRegex(RuntimeWarning, "contenu initial des images est invérifiable"):
+                main(common + ["--resume", str(legacy), "--output", str(root / "legacy-run")])
+            train_text = root / "text.jsonl"
+            train_text.write_text(json.dumps(dict(text="signal")))
+            val_common = ["--threads", "2", "train", "--preset", "tiny", "--steps", "2",
+                          "--batch-size", "1", "--data", str(train_text), "--val-data", str(data),
+                          "--output", str(root / "validation-run")]
+            main(val_common + ["--stop-after", "1"])
+            Image.new("RGB", (8, 8), "green").save(image)
+            with self.assertRaisesRegex(ValueError, "validation_images_fingerprint"):
+                main(val_common + ["--resume", str(root / "validation-run" / "latest.pt")])
+
     def test_inspection_counts_tied_weights_once(self):
         report = inspect_config(self.config)
         self.assertEqual(report["parameters"], sum(p.numel() for p in self.model.parameters()))

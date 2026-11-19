@@ -179,6 +179,30 @@ class ImprovementTests(unittest.TestCase):
         torch.testing.assert_close(torch.tensor(full["expert_effective_count"]),
                                    torch.tensor(split["expert_effective_count"]))
 
+    def test_training_expert_usage_covers_every_microbatch(self):
+        captured = []
+        forward = Chimera.forward
+
+        def capture(model, *args, **kwargs):
+            output = forward(model, *args, **kwargs)
+            if model.training:
+                captured.append((output.expert_usage.detach().double(), output.routed_tokens.item()))
+            return output
+
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
+            root = Path(directory)
+            data = root / "data.jsonl"
+            data.write_text("\n".join(json.dumps(dict(text=text)) for text in ("x", "longer", "a longer sentence")))
+            with patch.object(Chimera, "forward", capture):
+                main(["--threads", "2", "train", "--steps", "1", "--batch-size", "1", "--accumulation", "3",
+                      "--data", str(data), "--no-shuffle", "--modality-dropout", "0", "--output", str(root / "run")])
+            report = json.loads((root / "run/metrics.jsonl").read_text())
+            self.assertEqual(len(captured), 3)
+            self.assertEqual(report["expert_routed_tokens"], sum(count for _, count in captured))
+            weighted = sum(usage * count for usage, count in captured)
+            expected = weighted / weighted.sum(-1, keepdim=True)
+            torch.testing.assert_close(torch.tensor(report["expert_usage"], dtype=torch.float64), expected)
+
     def test_no_observed_targets_do_not_report_perfect_quality(self):
         batch = synthetic_batch(self.config, batch_size=2)
         batch["labels"].fill_(-100)

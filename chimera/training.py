@@ -21,6 +21,7 @@ from .data import JointDataset, collate_records, synthetic_batch
 from .model import Chimera
 from .modalities import MODALITIES, balanced_modalities, has_observed_targets, keep_modalities
 from .observed_objective import observed_objective, target_counts
+from .routing_metrics import summarize_expert_usage
 from .evaluation import evaluate
 from .modules import RotaryEmbedding
 
@@ -161,7 +162,8 @@ class DistributedTrainingModel(torch.nn.Module):
         loss = (output.loss if total_counts is None else
                 observed_objective(output, local_counts, total_counts, self.model.config,
                                    world=world, accumulation=accumulation))
-        return loss, {name: value.detach() for name, value in output.losses.items()}, output.expert_usage.detach()
+        return (loss, {name: value.detach() for name, value in output.losses.items()},
+                output.expert_usage.detach(), output.routed_tokens.detach())
 
 
 def train(args, config):
@@ -344,7 +346,9 @@ def train(args, config):
         optimizer.zero_grad(set_to_none=True)
         for group in optimizer.param_groups:
             group["lr"] = learning_rate(step, args.steps, args.lr, args.warmup) * group["lr_scale"]
-        metrics, expert_usage, modality_batches, series_statistics = {}, None, {}, {}
+        metrics, modality_batches, series_statistics = {}, {}, {}
+        expert_totals = torch.zeros(config.n_layers, config.n_experts, device=device, dtype=torch.float64)
+        expert_tokens = torch.zeros((), device=device, dtype=torch.long)
         def prepare_microbatch(micro):
             nonlocal epoch, iterator
             if iterator is None:
@@ -409,9 +413,10 @@ def train(args, config):
                 else:
                     result = wrapped(**batch)
                 if world > 1:
-                    batch_loss, batch_losses, batch_usage = result
+                    batch_loss, batch_losses, batch_usage, batch_routed = result
                 else:
-                    batch_loss, batch_losses, batch_usage = result.loss, result.losses, result.expert_usage
+                    batch_loss, batch_losses, batch_usage, batch_routed = (
+                        result.loss, result.losses, result.expert_usage, result.routed_tokens)
                 if batch_loss is None and total_counts is None:
                     raise ValueError("Aucune cible d'entraînement dans le batch")
                 if total_counts is None:
@@ -428,13 +433,19 @@ def train(args, config):
             metrics["loss"] = metrics.get("loss", 0) + logged_loss
             for key, value in batch_losses.items():
                 metrics[key] = metrics.get(key, 0) + value.detach().item() / args.accumulation
-            expert_usage = batch_usage
+            expert_totals += batch_usage.detach().double() * batch_routed
+            expert_tokens += batch_routed
         norm, skipped = step_optimizer(model, optimizer, scaler, args.grad_clip)
         last_step = step + 1
+        routing = torch.cat((expert_totals.flatten(), expert_tokens.reshape(1).double()))
+        if world > 1:
+            dist.reduce(routing, dst=0, op=dist.ReduceOp.SUM)
         if rank == 0:
+            routing_summary = summarize_expert_usage(routing[:-1].view(config.n_layers, config.n_experts),
+                                                      int(routing[-1].item()))
             row = dict(step=last_step, **metrics, grad_norm=norm, optimizer_step_skipped=skipped,
                        lr=optimizer.param_groups[0]["lr"], elapsed_seconds=round(time.monotonic() - started, 3),
-                       expert_usage=expert_usage.cpu().tolist(), modality_batches=modality_batches,
+                       **routing_summary, modality_batches=modality_batches,
                        series_statistics=series_statistics)
             with (output_dir / "metrics.jsonl").open("a", encoding="utf-8") as stream:
                 stream.write(json.dumps(row, allow_nan=False) + "\n")

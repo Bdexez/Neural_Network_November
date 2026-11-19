@@ -5,6 +5,8 @@ import math
 
 import torch
 
+from .routing_metrics import summarize_expert_usage
+
 
 def evaluate(model, batches, amp="none", *, calibration=None):
     if amp not in ("none", "bf16", "fp16"):
@@ -112,13 +114,7 @@ def evaluate(model, batches, amp="none", *, calibration=None):
                     accumulate(name, value.item(), weights.get(name, n))
         result = {name: total / counts[name] if counts[name] else None for name, total in totals.items()}
         if expert_tokens:
-            usage = expert_totals / expert_tokens
-            usage = usage / usage.sum(-1, keepdim=True)
-            entropy = -(usage * usage.clamp_min(1e-300).log()).sum(-1)
-            result["expert_usage"] = usage.tolist()
-            result["expert_routed_tokens"] = expert_tokens
-            result["expert_effective_count"] = entropy.exp().tolist()
-            result["expert_max_load_ratio"] = (usage.max(-1).values * usage.size(-1)).tolist()
+            result.update(summarize_expert_usage(expert_totals, expert_tokens))
         if auxiliary_counts:
             per_horizon = [auxiliary_totals[distance] / count for distance, count in auxiliary_counts.items() if count]
             result["multi_token"] = sum(per_horizon) / len(per_horizon) if per_horizon else None

@@ -59,7 +59,7 @@ def distributed_worker(rank, init_file, output_dir, mixed=False):
         dist.all_reduce(total)
         for index, (chunk, local) in enumerate(zip(chunks, counts)):
             with wrapped.no_sync() if index == 0 else nullcontext():
-                loss, _, _ = wrapped(local_counts=local, total_counts=total, accumulation=2, world=2, **chunk)
+                loss, _, _, _ = wrapped(local_counts=local, total_counts=total, accumulation=2, world=2, **chunk)
                 loss.backward()
         torch.save({name: p.grad for name, p in model.named_parameters()}, Path(output_dir) / f"rank{rank}.pt")
     finally:

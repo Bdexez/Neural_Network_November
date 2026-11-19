@@ -15,6 +15,7 @@ def evaluate(model, batches, amp="none", *, calibration=None):
     model.eval()
     device = next(model.parameters()).device
     totals, counts = {}, {}
+    auxiliary_totals, auxiliary_counts = {}, {}
     correct = class_count = forecast_count = 0
     absolute = squared = covered = width = 0.0
     horizon_error = torch.zeros(model.config.forecast_horizon, dtype=torch.float64)
@@ -93,12 +94,22 @@ def evaluate(model, batches, amp="none", *, calibration=None):
                 if output.loss is not None:
                     accumulate("loss", output.loss.item(), n)
                 for name, value in output.losses.items():
+                    if name == "multi_token" and getattr(output, "auxiliary_text_losses", None) is not None:
+                        for distance, (head_loss, count) in output.auxiliary_text_losses.items():
+                            count = count.item()
+                            auxiliary_totals[distance] = auxiliary_totals.get(distance, 0.0) + head_loss.item() * count
+                            auxiliary_counts[distance] = auxiliary_counts.get(distance, 0) + count
+                        continue
                     accumulate(name, value.item(), weights.get(name, n))
         result = {name: total / counts[name] if counts[name] else None for name, total in totals.items()}
+        if auxiliary_counts:
+            per_horizon = [auxiliary_totals[distance] / count for distance, count in auxiliary_counts.items() if count]
+            result["multi_token"] = sum(per_horizon) / len(per_horizon) if per_horizon else None
         if "text" in counts:
             result["text_tokens"] = counts["text"]
             if model.config.prediction_steps > 1:
                 result["multi_token_targets"] = multi_token_count
+                result.setdefault("multi_token", None)
             result["byte_perplexity"] = math.exp(min(result["text"], 20)) if counts["text"] else None
         if "classification" in counts:
             result["classified_examples"] = class_count

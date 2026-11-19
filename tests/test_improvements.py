@@ -150,6 +150,7 @@ class ImprovementTests(unittest.TestCase):
         batch["forecast_targets"].fill_(float("nan"))
         report = evaluate(Chimera(self.config), [batch])
         self.assertIsNone(report["text"])
+        self.assertIsNone(report["multi_token"])
         self.assertIsNone(report["classification"])
         self.assertIsNone(report["forecast"])
         self.assertIsNone(report["forecast_mae"])
@@ -164,6 +165,21 @@ class ImprovementTests(unittest.TestCase):
         self.assertEqual(report["text_tokens"], 0)
         self.assertEqual(report["multi_token_targets"], 1)
         self.assertIsNone(report["text"])
+        short = evaluate(model, [dict(input_ids=torch.tensor([[1]]), labels=torch.tensor([[1]]))])
+        self.assertEqual(short["multi_token_targets"], 0)
+        self.assertIsNone(short["multi_token"])
+
+    def test_auxiliary_text_metric_weights_targets_per_horizon_across_batches(self):
+        model = Chimera(replace(self.config, prediction_steps=5)).eval()
+        ids = torch.tensor([[1, 4, 5, 0, 0, 0], [1, 8, 9, 10, 11, 12]])
+        mask = torch.tensor([[1, 1, 1, 0, 0, 0], [1, 1, 1, 1, 1, 1]], dtype=torch.bool)
+        batch = dict(input_ids=ids, labels=ids.clone(), attention_mask=mask)
+        chunks = [dict(input_ids=ids[:1, :3], labels=ids[:1, :3], attention_mask=mask[:1, :3]),
+                  dict(input_ids=ids[1:], labels=ids[1:], attention_mask=mask[1:])]
+        full, split = evaluate(model, [batch]), evaluate(model, chunks)
+        self.assertEqual(full["multi_token_targets"], split["multi_token_targets"])
+        self.assertGreater(full["multi_token_targets"], 0)
+        self.assertAlmostEqual(full["multi_token"], split["multi_token"], places=5)
 
     def test_grad_scaler_skips_overflow_then_recovers(self):
         model = torch.nn.Linear(1, 1, bias=False)

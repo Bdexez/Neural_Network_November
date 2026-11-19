@@ -35,6 +35,7 @@ class ChimeraOutput:
     losses: dict[str, torch.Tensor]
     expert_usage: torch.Tensor
     cache: ModelCache | None = None
+    auxiliary_text_losses: dict[int, tuple[torch.Tensor, torch.Tensor]] | None = None
 
 
 def masked_cross_entropy(logits, labels):
@@ -247,6 +248,7 @@ class Chimera(nn.Module):
         if self.forecast_adapter is not None and adapter_context is not None:
             forecast = self.forecast_adapter(forecast, adapter_context)
 
+        auxiliary_text_losses = {}
         losses = {
             "balance": torch.stack(balance_losses).mean(),
             "router_z": torch.stack(z_losses).mean(),
@@ -263,8 +265,11 @@ class Chimera(nn.Module):
                 if hidden.size(1) > distance:
                     future_logits = self.lm_head(head(hidden[:, :-distance]))
                     future_targets = targets[:, distance:].masked_fill(~valid[:, :-distance], -100)
-                    mtp_losses.append(masked_cross_entropy(future_logits, future_targets))
-                    mtp_active.append((future_targets != -100).any())
+                    head_loss = masked_cross_entropy(future_logits, future_targets)
+                    head_count = (future_targets != -100).sum()
+                    auxiliary_text_losses[distance] = (head_loss, head_count)
+                    mtp_losses.append(head_loss)
+                    mtp_active.append(head_count > 0)
             if mtp_losses:
                 # Les horizons sans cible ne doivent pas diluer les horizons actifs.
                 active = torch.stack(mtp_active).to(dtype=mtp_losses[0].dtype)
@@ -299,7 +304,7 @@ class Chimera(nn.Module):
         next_cache = (ModelCache(next_layers, latents, offset + hidden.size(1), mean, scale, baseline, adapter_context)
                       if use_cache else None)
         return ChimeraOutput(logits, class_logits, forecast, total if supervised else None,
-                             losses, torch.stack(usage), next_cache)
+                             losses, torch.stack(usage), next_cache, auxiliary_text_losses)
 
     @torch.inference_mode()
     def generate(self, input_ids, *, max_new_tokens=64, temperature=0.8, top_k=40,

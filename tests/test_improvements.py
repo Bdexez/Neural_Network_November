@@ -3,6 +3,7 @@ from dataclasses import replace
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import pickle
 import tempfile
@@ -121,6 +122,90 @@ class ImprovementTests(unittest.TestCase):
             dataset = JointDataset(path, self.config)
             loader = DataLoader(dataset, batch_size=2, num_workers=2, collate_fn=collate_records)
             self.assertEqual(sum(batch["input_ids"].size(0) for batch in loader), 8)
+
+    def test_indexed_dataset_rejects_same_size_replacement_and_restored_mtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "data.jsonl"
+            path.write_text('{"text":"alpha"}\n')
+            dataset = JointDataset(path, self.config)
+            original = path.stat()
+            replacement = path.with_name("replacement.jsonl")
+            replacement.write_text('{"text":"omega"}\n')
+            os.utime(replacement, ns=(original.st_atime_ns, original.st_mtime_ns))
+            os.replace(replacement, path)
+            self.assertEqual((path.stat().st_size, path.stat().st_mtime_ns),
+                             (original.st_size, original.st_mtime_ns))
+            with self.assertRaisesRegex(ValueError, "changé"):
+                dataset[0]
+
+    def test_indexed_dataset_rejects_replacement_before_open(self):
+        for indexing in (True, False):
+            with self.subTest(indexing=indexing), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "data.jsonl"
+                path.write_text('{"text":"alpha"}\n')
+                dataset = None if indexing else JointDataset(path, self.config)
+                replacement = path.with_name("replacement.jsonl")
+                replacement.write_text('{"text":"omega"}\n')
+                original_open = Path.open
+
+                def replace_before_open(candidate, *args, **kwargs):
+                    if candidate == path and replacement.exists():
+                        os.replace(replacement, path)
+                    return original_open(candidate, *args, **kwargs)
+
+                with patch.object(Path, "open", replace_before_open):
+                    with self.assertRaisesRegex(ValueError, "changé"):
+                        JointDataset(path, self.config) if indexing else dataset[0]
+
+    def test_indexed_dataset_rejects_in_place_edit_with_restored_mtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "data.jsonl"
+            path.write_text('{"text":"alpha"}\n')
+            dataset = JointDataset(path, self.config)
+            original = path.stat()
+            path.write_text('{"text":"omega"}\n')
+            os.utime(path, ns=(original.st_atime_ns, original.st_mtime_ns))
+            self.assertEqual((path.stat().st_ino, path.stat().st_size, path.stat().st_mtime_ns),
+                             (original.st_ino, original.st_size, original.st_mtime_ns))
+            with self.assertRaisesRegex(ValueError, "changé"):
+                dataset[0]
+
+    def test_indexed_dataset_rejects_replacement_during_read(self):
+        for indexing in (True, False):
+            with self.subTest(indexing=indexing), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "data.jsonl"
+                path.write_text('{"text":"alpha"}\n')
+                dataset = None if indexing else JointDataset(path, self.config)
+                replacement = path.with_name("replacement.jsonl")
+                replacement.write_text('{"text":"omega"}\n')
+                original_open = Path.open
+
+                class ReplacingReader:
+                    def __init__(self, stream):
+                        self.stream = stream
+
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, *args):
+                        return self.stream.__exit__(*args)
+
+                    def __getattr__(self, name):
+                        return getattr(self.stream, name)
+
+                    def readline(self):
+                        line = self.stream.readline()
+                        if replacement.exists():
+                            os.replace(replacement, path)
+                        return line
+
+                def replace_during_read(candidate, *args, **kwargs):
+                    stream = original_open(candidate, *args, **kwargs)
+                    return ReplacingReader(stream) if candidate == path else stream
+
+                with patch.object(Path, "open", replace_during_read):
+                    with self.assertRaisesRegex(ValueError, "changé"):
+                        JointDataset(path, self.config) if indexing else dataset[0]
 
     def test_record_validation_reports_line_and_rejects_fractional_class(self):
         with tempfile.TemporaryDirectory() as directory:

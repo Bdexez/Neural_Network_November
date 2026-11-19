@@ -37,12 +37,14 @@ class JointDataset(Dataset):
     def __init__(self, path, config):
         self.path = Path(path).resolve()
         self.config = config
-        initial_stat = self.path.stat()
+        initial_identity = file_identity(self.path.stat())
         self.offsets, self.line_numbers = array("Q"), array("Q")
         signature = None
         digest = hashlib.sha256()
         image_lines = {}
         with self.path.open("rb") as stream:
+            if file_identity(os.fstat(stream.fileno())) != initial_identity:
+                raise ValueError(f"Le jeu de données a changé pendant son indexation : {self.path}")
             line_number = 0
             while True:
                 offset = stream.tell()
@@ -73,6 +75,9 @@ class JointDataset(Dataset):
                     image_lines.setdefault(image_path, line_number)
                 self.offsets.append(offset)
                 self.line_numbers.append(line_number)
+            if (file_identity(os.fstat(stream.fileno())) != initial_identity
+                    or file_identity(self.path.stat()) != initial_identity):
+                raise ValueError(f"Le jeu de données a changé pendant son indexation : {self.path}")
         if not self.offsets:
             raise ValueError("Le fichier JSONL ne contient aucun exemple")
         self.fingerprint = digest.hexdigest()
@@ -95,8 +100,8 @@ class JointDataset(Dataset):
             image_digests[name] = image_digest.hexdigest()
         manifest = json.dumps(image_digests, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
         self.image_fingerprint = hashlib.sha256(manifest.encode("ascii")).hexdigest() if image_digests else None
-        self._stat = self.path.stat()
-        if (self._stat.st_size, self._stat.st_mtime_ns) != (initial_stat.st_size, initial_stat.st_mtime_ns):
+        self._identity = file_identity(self.path.stat())
+        if self._identity != initial_identity:
             raise ValueError(f"Le jeu de données a changé pendant son indexation : {self.path}")
 
     def __len__(self):
@@ -113,12 +118,15 @@ class JointDataset(Dataset):
         return any(identity == known[:2] for known in self._image_identities.values())
 
     def __getitem__(self, index):
-        stat = self.path.stat()
-        if (stat.st_size, stat.st_mtime_ns) != (self._stat.st_size, self._stat.st_mtime_ns):
-            raise ValueError(f"Le jeu de données a changé après son indexation : {self.path}")
         with self.path.open("rb") as stream:
+            if file_identity(os.fstat(stream.fileno())) != self._identity:
+                raise ValueError(f"Le jeu de données a changé après son indexation : {self.path}")
             stream.seek(self.offsets[index])
-            record = json.loads(stream.readline())
+            line = stream.readline()
+            if (file_identity(os.fstat(stream.fileno())) != self._identity
+                    or file_identity(self.path.stat()) != self._identity):
+                raise ValueError(f"Le jeu de données a changé pendant sa lecture : {self.path}")
+        record = json.loads(line)
         try:
             return self._convert(record)
         except (ValueError, TypeError, RuntimeError, OSError) as exc:

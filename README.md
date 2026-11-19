@@ -177,6 +177,8 @@ Reprise exacte sur un processus, en conservant les mêmes arguments de planning 
 
 La suite de tests compare les poids d'une exécution continue et d'une reprise avec dropout, accumulation, mélange des données et arrêt anticipé : ils doivent être identiques bit à bit. Les empreintes SHA-256 des JSONL d'entraînement et de validation sont conservées dans les nouveaux checkpoints et vérifiées à la reprise. Une empreinte distincte couvre le contenu des images externes référencées par `image_path` ; une modification détectée empêche la reprise. Les anciens checkpoints restent utilisables avec un avertissement si leur empreinte d'images manque.
 
+Le lecteur indexé contrôle aussi l'identité et les métadonnées du JSONL lors de son indexation et autour de chaque lecture. Un remplacement ou une modification détectée interrompt la lecture, même si la taille et la date de modification ont été conservées. Ces contrôles dépendent des métadonnées du système de fichiers et ne remplacent pas le stockage stable des jeux de données pendant une exécution.
+
 Pour adapter des poids existants avec un nouvel optimiseur, un nouveau planning et de nouvelles données :
 
 ```bash

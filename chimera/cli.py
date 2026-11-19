@@ -355,7 +355,9 @@ def main(argv=None):
             calibration = fit_calibration(model, loader, coverage=args.coverage, amp=args.amp, scope=args.scope,
                                           score_scale=args.score_scale, scale_floor=args.scale_floor,
                                           checkpoint_sha256=file_sha256(args.checkpoint),
-                                          dataset_sha256=dataset.fingerprint)
+                                          dataset_sha256=dataset.fingerprint,
+                                          dataset_images_sha256=dataset.image_fingerprint,
+                                          dataset_images_recorded=True)
             content = json.dumps(calibration.to_dict(), indent=2, allow_nan=False) + "\n"
             with prediction_stream(args.output) as stream:
                 stream.write(content)
@@ -368,7 +370,14 @@ def main(argv=None):
             calibration.validate_checkpoint(args.checkpoint)
         report = evaluate(model, loader, args.amp, calibration=calibration)
         if calibration is not None:
-            report["calibration_data_reused"] = dataset.fingerprint == calibration.dataset_sha256
+            identical = (dataset.fingerprint == calibration.dataset_sha256
+                         if calibration.dataset_sha256 is not None else None)
+            report["calibration_jsonl_identical"] = identical
+            # Des fichiers différents peuvent néanmoins partager des exemples.
+            report["calibration_data_reused"] = True if identical else None
+            report["calibration_external_images_match"] = (
+                dataset.image_fingerprint == calibration.dataset_images_sha256
+                if calibration.dataset_images_recorded else None)
         content = json.dumps(report, indent=2, allow_nan=False) + "\n"
         if args.output:
             with prediction_stream(args.output) as stream:

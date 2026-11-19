@@ -71,7 +71,9 @@ class CalibrationCliTests(unittest.TestCase):
                       "--calibration", str(calibration_path)]
             main(["evaluate", *common, "--output", str(report_path)])
             report = json.loads(report_path.read_text())
-            self.assertFalse(report["calibration_data_reused"])
+            self.assertIsNone(report["calibration_data_reused"])
+            self.assertFalse(report["calibration_jsonl_identical"])
+            self.assertTrue(report["calibration_external_images_match"])
             self.assertIn("calibrated_interval_score", report)
             joint_path = root / "joint.json"
             main(["calibrate", "--checkpoint", str(checkpoint), "--data", str(calibration_data),
@@ -145,6 +147,63 @@ class CalibrationCliTests(unittest.TestCase):
                 main(["predict", "--checkpoint", str(checkpoint), "--data", str(changed),
                       "--calibration", str(calibration_path), "--output", str(predictions)])
             self.assertEqual(predictions.read_text(), "previous predictions\n")
+
+    def test_data_reuse_diagnostics_track_external_images_and_legacy_metadata(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow requis pour les images externes")
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            root = Path(directory)
+            config = replace(ChimeraConfig.preset("tiny"), forecast_horizon=2, series_features=1)
+            checkpoint, calibration_path = root / "model.pt", root / "calibration.json"
+            save_checkpoint(checkpoint, Chimera(config))
+            original, copy = root / "original", root / "copy"
+            original.mkdir()
+            copy.mkdir()
+            for path, color in ((original, "black"), (copy, "white")):
+                Image.new("RGB", (config.image_size, config.image_size), color).save(path / "image.png")
+            batch = synthetic_batch(config, batch_size=10, seed=1901)
+            rows = [dict(image_path="image.png", series=batch["series"][i].tolist(),
+                         future=batch["forecast_targets"][i].tolist()) for i in range(10)]
+            text = "\n".join(json.dumps(row) for row in rows) + "\n"
+            (original / "data.jsonl").write_text(text)
+            (copy / "data.jsonl").write_text(text)
+            main(["calibrate", "--checkpoint", str(checkpoint), "--data", str(original / "data.jsonl"),
+                  "--output", str(calibration_path)])
+            fitted = ForecastCalibration.load(calibration_path)
+            self.assertTrue(fitted.dataset_images_recorded)
+            self.assertEqual(len(fitted.dataset_images_sha256), 64)
+            report = root / "report.json"
+
+            def evaluate_on(path):
+                main(["evaluate", "--checkpoint", str(checkpoint), "--data", str(path),
+                      "--calibration", str(calibration_path), "--output", str(report)])
+                return json.loads(report.read_text())
+
+            same = evaluate_on(original / "data.jsonl")
+            self.assertTrue(same["calibration_jsonl_identical"])
+            self.assertTrue(same["calibration_data_reused"])
+            self.assertTrue(same["calibration_external_images_match"])
+            changed_image = evaluate_on(copy / "data.jsonl")
+            self.assertTrue(changed_image["calibration_data_reused"])
+            self.assertFalse(changed_image["calibration_external_images_match"])
+            # Même contenu logique et mêmes cibles, mais octets JSONL différents.
+            (original / "data.jsonl").write_text(text + "\n")
+            different_bytes = evaluate_on(original / "data.jsonl")
+            self.assertFalse(different_bytes["calibration_jsonl_identical"])
+            self.assertIsNone(different_bytes["calibration_data_reused"])
+            self.assertTrue(different_bytes["calibration_external_images_match"])
+            legacy = json.loads(calibration_path.read_text())
+            del legacy["dataset_images_sha256"]
+            calibration_path.write_text(json.dumps(legacy))
+            self.assertFalse(ForecastCalibration.load(calibration_path).dataset_images_recorded)
+            self.assertIsNone(evaluate_on(original / "data.jsonl")["calibration_external_images_match"])
+            legacy["dataset_sha256"] = None
+            calibration_path.write_text(json.dumps(legacy))
+            unknown = evaluate_on(original / "data.jsonl")
+            self.assertIsNone(unknown["calibration_jsonl_identical"])
+            self.assertIsNone(unknown["calibration_data_reused"])
 
 
 if __name__ == "__main__":

@@ -71,6 +71,8 @@ class ForecastCalibration:
     scope: str = "marginal"
     score_scale: str = "none"
     scale_floor: float = 1e-6
+    dataset_images_sha256: str | None = None
+    dataset_images_recorded: bool = False
 
     def __post_init__(self):
         self.quantiles, self.modalities = tuple(self.quantiles), tuple(self.modalities)
@@ -102,8 +104,12 @@ class ForecastCalibration:
             raise ValueError("Effectif insuffisant pour une correction conformelle finie")
         if not self.modalities or self.modalities != tuple(name for name in MODALITIES if name in self.modalities):
             raise ValueError("La signature de modalités est invalide")
-        for digest in (self.checkpoint_sha256, self.dataset_sha256):
-            if digest is not None and (len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest)):
+        if type(self.dataset_images_recorded) is not bool or (
+                self.dataset_images_sha256 is not None and not self.dataset_images_recorded):
+            raise ValueError("La provenance des images doit être explicitement enregistrée")
+        for digest in (self.checkpoint_sha256, self.dataset_sha256, self.dataset_images_sha256):
+            if digest is not None and (not isinstance(digest, str) or len(digest) != 64
+                                       or any(c not in "0123456789abcdef" for c in digest)):
                 raise ValueError("Une empreinte SHA-256 hexadécimale est requise")
 
     @classmethod
@@ -194,12 +200,15 @@ class ForecastCalibration:
             data.update(format_version=2, scope="joint")
         if self.score_scale == "width":
             data.update(format_version=3, score_scale="width", scale_floor=self.scale_floor)
+        if self.dataset_images_recorded:
+            data["dataset_images_sha256"] = self.dataset_images_sha256
         return data
 
     @classmethod
     def from_dict(cls, data):
         values = dict(data)
         version = values.pop("format_version", None)
+        values["dataset_images_recorded"] = "dataset_images_sha256" in values
         if version not in (1, 2, 3):
             raise ValueError("Version de calibration inconnue")
         if (version == 1 and values.get("scope", "marginal") != "marginal"

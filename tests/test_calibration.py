@@ -325,6 +325,10 @@ class CalibrationTests(unittest.TestCase):
         for change in (dict(coverage=1), dict(coverage=float("nan")), dict(counts=[[0]]),
                        dict(counts=[[1.5]]), dict(correction=[[float("inf")]]),
                        dict(modalities=("series", "images")), dict(checkpoint_sha256="invalid"),
+                       dict(dataset_images_sha256="a" * 64),
+                       dict(dataset_images_sha256="invalid", dataset_images_recorded=True),
+                       dict(dataset_images_sha256=123, dataset_images_recorded=True),
+                       dict(dataset_images_recorded=1),
                        dict(quantiles=(0.1, 0.9)), dict(scope="invalid")):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 ForecastCalibration(**(valid | change))
@@ -335,6 +339,21 @@ class CalibrationTests(unittest.TestCase):
             ForecastCalibration.from_dict(dict(format_version=999))
         with self.assertRaisesRegex(ValueError, "Version et portée"):
             ForecastCalibration.from_dict(dict(format_version=1, scope="joint"))
+
+    def test_image_provenance_is_optional_and_roundtrips_all_formats(self):
+        common = dict(quantiles=(0.1, 0.5, 0.9), coverage=0.8, correction=[[0.]], counts=[[20]],
+                      modalities=("series",))
+        for options in ({}, {"scope": "joint"}, {"scope": "joint", "score_scale": "width"}):
+            for digest in (None, "a" * 64):
+                with self.subTest(options=options, digest=digest):
+                    fitted = ForecastCalibration(**common, **options, dataset_images_recorded=True,
+                                                 dataset_images_sha256=digest)
+                    loaded = ForecastCalibration.from_dict(fitted.to_dict())
+                    self.assertTrue(loaded.dataset_images_recorded)
+                    self.assertEqual(loaded.dataset_images_sha256, digest)
+                    legacy = fitted.to_dict()
+                    del legacy["dataset_images_sha256"]
+                    self.assertFalse(ForecastCalibration.from_dict(legacy).dataset_images_recorded)
 
 
 if __name__ == "__main__":

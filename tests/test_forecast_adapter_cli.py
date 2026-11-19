@@ -18,6 +18,26 @@ from tools.benchmark_calibration import main as benchmark_calibration
 
 
 class ForecastAdapterCliTests(unittest.TestCase):
+    def test_separate_missing_cli_fits_long_missing_without_short_examples(self):
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            root = Path(directory)
+            source, data, output, report = [root / name for name in ("base.pt", "data.jsonl", "fit.pt", "report.json")]
+            save_checkpoint(source, Chimera(ChimeraConfig.preset("tiny")))
+            make_data(["--checkpoint", str(source), "--output", str(data), "--examples", "32",
+                       "--batch-size", "16", "--min-history", "32", "--missing-rate", "0.4",
+                       "--mask-probability", "1"])
+            main(["--threads", "2", "refine-forecast", "--checkpoint", str(source), "--data", str(data),
+                  "--output", str(output), "--report", str(report), "--separate-missing"])
+            model, _ = load_checkpoint(output)
+            result = json.loads(report.read_text())
+            self.assertTrue(model.config.forecast_adapter_missing_gate)
+            self.assertTrue(model.config.forecast_adapter_separate_missing)
+            self.assertTrue(result["branches"]["long_missing"]["fitted"])
+            self.assertFalse(result["branches"]["length"]["fitted"])
+            self.assertEqual(result["updated_parameters"], 396)
+            self.assertEqual(model.forecast_adapter.proj.weight.count_nonzero().item(), 0)
+            self.assertGreater(model.forecast_adapter.missing_proj.weight.count_nonzero().item(), 0)
+
     def test_missing_gate_benchmark_validates_inputs_and_preserves_checkpoint(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

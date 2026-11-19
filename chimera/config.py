@@ -38,6 +38,7 @@ class ChimeraConfig:
     forecast_adapter_context: int = 0
     forecast_adapter_relative: bool = False
     forecast_adapter_missing_gate: bool = False
+    forecast_adapter_separate_missing: bool = False
     quantiles: tuple[float, ...] = (0.1, 0.5, 0.9)
     prediction_steps: int = 2
     balance_weight: float = 0.01
@@ -112,6 +113,11 @@ class ChimeraConfig:
             raise ValueError("forecast_adapter_relative doit être booléen")
         if type(self.forecast_adapter_missing_gate) is not bool:
             raise ValueError("forecast_adapter_missing_gate doit être booléen")
+        if type(self.forecast_adapter_separate_missing) is not bool:
+            raise ValueError("forecast_adapter_separate_missing doit être booléen")
+        if self.forecast_adapter_separate_missing and not (self.forecast_adapter_missing_gate
+                                                           and self.forecast_adapter_context):
+            raise ValueError("forecast_adapter_separate_missing nécessite l'adaptateur et sa porte de valeurs manquantes")
 
     def to_dict(self):
         return asdict(self)

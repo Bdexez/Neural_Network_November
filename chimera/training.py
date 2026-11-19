@@ -97,19 +97,32 @@ def load_checkpoint(path, device="cpu", *, mmap=True, overrides=None):
     elif original_config.temporal_statistics and not config.temporal_statistics:
         state.pop(statistics_key)
     adapter_keys = ("forecast_adapter.proj.weight", "forecast_adapter.proj.bias")
+    missing_keys = ("forecast_adapter.missing_proj.weight", "forecast_adapter.missing_proj.bias")
     if (config.forecast_adapter_context != original_config.forecast_adapter_context
             or config.forecast_adapter_relative != original_config.forecast_adapter_relative
-            or config.forecast_adapter_missing_gate != original_config.forecast_adapter_missing_gate):
+            or config.forecast_adapter_missing_gate != original_config.forecast_adapter_missing_gate
+            or config.forecast_adapter_separate_missing != original_config.forecast_adapter_separate_missing):
+        same_length_branch = (config.forecast_adapter_context == original_config.forecast_adapter_context > 0
+                              and config.forecast_adapter_relative == original_config.forecast_adapter_relative
+                              and (not original_config.forecast_adapter_missing_gate
+                                   or original_config.forecast_adapter_separate_missing)
+                              and (not config.forecast_adapter_missing_gate or config.forecast_adapter_separate_missing))
+        old_keys = (*adapter_keys, *(missing_keys if original_config.forecast_adapter_separate_missing else ()))
+        new_keys = (*adapter_keys, *(missing_keys if config.forecast_adapter_separate_missing else ()))
         if original_config.forecast_adapter_context:
-            for key in adapter_keys:
-                state.pop(key)  # Refuser aussi un ancien adaptateur incomplet.
-        elif any(key in state for key in adapter_keys):
+            if not original_config.forecast_adapter_separate_missing and any(key in state for key in missing_keys):
+                raise ValueError("L'adaptateur contredit la configuration du checkpoint")
+            for key in old_keys:
+                if not same_length_branch or key in missing_keys:
+                    state.pop(key)  # Refuser aussi un ancien adaptateur incomplet.
+        elif any(key in state for key in (*adapter_keys, *missing_keys)):
             raise ValueError("L'adaptateur contredit la configuration du checkpoint")
         if config.forecast_adapter_context:
             expected = model.forecast_adapter.state_dict()
-            for key in adapter_keys:
-                relative = key.removeprefix("forecast_adapter.")
-                state[key] = torch.zeros(expected[relative].shape, dtype=state["embedding.weight"].dtype, device="cpu")
+            for key in new_keys:
+                if not same_length_branch or key in missing_keys:
+                    relative = key.removeprefix("forecast_adapter.")
+                    state[key] = torch.zeros(expected[relative].shape, dtype=state["embedding.weight"].dtype, device="cpu")
     model.load_state_dict(state, strict=True, assign=True)
     # assign remplace les Parameters ; rétablir explicitement le poids partagé.
     model.lm_head.weight = model.embedding.weight

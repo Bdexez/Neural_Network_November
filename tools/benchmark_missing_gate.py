@@ -50,7 +50,9 @@ def main():
     measurements = {}
     for label, overrides in (("base", None),
                              ("length_gate", {"forecast_adapter_context": 8, "forecast_adapter_missing_gate": False}),
-                             ("missing_gate", {"forecast_adapter_context": 8, "forecast_adapter_missing_gate": True})):
+                             ("missing_gate", {"forecast_adapter_context": 8, "forecast_adapter_missing_gate": True}),
+                             ("separate_missing", {"forecast_adapter_context": 8, "forecast_adapter_missing_gate": True,
+                                                   "forecast_adapter_separate_missing": True})):
         model, payload = load_checkpoint(args.checkpoint, overrides=overrides)
         if label == "base" and model.forecast_adapter is not None:
             parser.error("Le checkpoint de départ ne doit pas contenir d'adaptateur")

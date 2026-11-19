@@ -188,6 +188,8 @@ def main(argv=None):
                           help="Statistiques sans niveau ni échelle absolus ; sinon conserver le mode du parent")
     refining.add_argument("--missing-gate", action=argparse.BooleanOptionalAction, default=None,
                           help="Activer la correction par variable aussi en présence de valeurs manquantes")
+    refining.add_argument("--separate-missing", action=argparse.BooleanOptionalAction, default=None,
+                          help="Utiliser une correction distincte pour les historiques longs incomplets")
     refining.add_argument("--ridge", type=float, default=0.001)
     refining.add_argument("--batch-size", type=int, default=32)
     refining.add_argument("--device", default="cpu")
@@ -317,6 +319,12 @@ def main(argv=None):
             overrides["forecast_adapter_relative"] = args.relative_features
         if args.missing_gate is not None:
             overrides["forecast_adapter_missing_gate"] = args.missing_gate
+        if args.separate_missing is not None:
+            overrides["forecast_adapter_separate_missing"] = args.separate_missing
+        if args.separate_missing is True and args.missing_gate is None:
+            overrides["forecast_adapter_missing_gate"] = True
+        if args.missing_gate is False and args.separate_missing is None:
+            overrides["forecast_adapter_separate_missing"] = False
         model, payload = load_checkpoint(args.checkpoint, args.device, overrides=overrides)
         step = payload["step"]
         seed = payload.get("trainer", {}).get("seed", 42)

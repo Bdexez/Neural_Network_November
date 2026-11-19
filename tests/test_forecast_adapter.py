@@ -129,6 +129,104 @@ class ForecastAdapterTests(unittest.TestCase):
         output.loss.backward()
         self.assertTrue(torch.isfinite(model.forecast_adapter.proj.weight.grad).all())
 
+    def test_separate_missing_fits_independently_and_preserves_short_predictions(self):
+        base = replace(ChimeraConfig.preset("tiny"), forecast_adapter_context=8)
+        length_model = Chimera(base).eval()
+        separate = Chimera(replace(base, forecast_adapter_missing_gate=True,
+                                   forecast_adapter_separate_missing=True)).eval()
+        missing = separate.load_state_dict(length_model.state_dict(), strict=False)
+        self.assertEqual(set(missing.missing_keys), {"forecast_adapter.missing_proj.weight",
+                                                   "forecast_adapter.missing_proj.bias"})
+        short = synthetic_batch(base, batch_size=24, seed=770)
+        short["series"], short["series_mask"] = short["series"][:, -8:], short["series_mask"][:, -8:]
+        long = synthetic_batch(base, batch_size=24, seed=771)
+        long["series"][:, ::3] = float("nan")
+        long["forecast_targets"][0, 1, 0] = float("nan")
+        fit_forecast_adapter(length_model, [short, long])
+        report = fit_forecast_adapter(separate, [short, long])
+        self.assertEqual(report["branches"]["length"]["observed_targets_by_horizon"][0], 72)
+        self.assertEqual(report["branches"]["long_missing"]["observed_targets_by_horizon"][1], 71)
+        self.assertEqual(report["updated_parameters"], 792)
+        torch.testing.assert_close(length_model.forecast_adapter.proj.weight,
+                                   separate.forecast_adapter.proj.weight, rtol=0, atol=0)
+        with torch.inference_mode():
+            short_a, short_b = length_model(series=short["series"]), separate(series=short["series"])
+            long_a, long_b = length_model(series=long["series"]), separate(series=long["series"])
+            clean = synthetic_batch(base, batch_size=3, seed=772)
+            clean_a, clean_b = length_model(series=clean["series"]), separate(series=clean["series"])
+        torch.testing.assert_close(short_a.forecast, short_b.forecast, rtol=0, atol=0)
+        torch.testing.assert_close(clean_a.forecast, clean_b.forecast, rtol=0, atol=0)
+        torch.testing.assert_close(long_a.classification_logits, long_b.classification_logits, rtol=0, atol=0)
+        self.assertFalse(torch.equal(long_a.forecast, long_b.forecast))
+
+    def test_separate_missing_preserves_unfitted_branch_and_fails_atomically(self):
+        config = replace(ChimeraConfig.preset("tiny"), forecast_adapter_context=8,
+                         forecast_adapter_missing_gate=True, forecast_adapter_separate_missing=True)
+        model = Chimera(config).eval()
+        short = synthetic_batch(config, batch_size=12, seed=773)
+        short["series"], short["series_mask"] = short["series"][:, -8:], short["series_mask"][:, -8:]
+        long = synthetic_batch(config, batch_size=12, seed=774)
+        long["series"][:, ::2] = float("nan")
+        torch.nn.init.ones_(model.forecast_adapter.missing_proj.bias)
+        report = fit_forecast_adapter(model, [short])
+        self.assertFalse(report["branches"]["long_missing"]["fitted"])
+        self.assertEqual(report["updated_parameters"], 396)
+        self.assertEqual(report["total_adapter_parameters"], 792)
+        self.assertTrue((model.forecast_adapter.missing_proj.bias == 1).all())
+        state = {key: value.clone() for key, value in model.forecast_adapter.state_dict().items()}
+        long["forecast_targets"][:, 0, :] = float("nan")
+        with self.assertRaisesRegex(ValueError, "long_missing"):
+            fit_forecast_adapter(model, [short, long])
+        for key, value in model.forecast_adapter.state_dict().items():
+            torch.testing.assert_close(value, state[key], rtol=0, atol=0)
+        self.assertFalse(model.forecast_adapter._forward_pre_hooks)
+
+    def test_separate_missing_checkpoint_transfer_and_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "model.pt"
+            config = replace(ChimeraConfig.preset("tiny"), forecast_adapter_context=8)
+            original = Chimera(config).eval()
+            torch.nn.init.normal_(original.forecast_adapter.proj.weight, std=0.02)
+            save_checkpoint(path, original)
+            separate, _ = load_checkpoint(path, overrides={"forecast_adapter_missing_gate": True,
+                                                           "forecast_adapter_separate_missing": True})
+            self.assertEqual(separate.forecast_adapter.missing_proj.weight.count_nonzero().item(), 0)
+            torch.testing.assert_close(separate.forecast_adapter.proj.weight, original.forecast_adapter.proj.weight,
+                                       rtol=0, atol=0)
+            torch.nn.init.normal_(separate.forecast_adapter.missing_proj.weight, std=0.03)
+            batch = synthetic_batch(config, batch_size=2, seed=775)
+            batch["series"][:, ::3, 0] = float("nan")
+            separate.eval()
+            ids = batch["input_ids"][:, :8]
+            with torch.inference_mode(), torch.autocast("cpu", dtype=torch.bfloat16):
+                full = separate(ids, series=batch["series"])
+                prefix = separate(ids[:, :4], series=batch["series"], use_cache=True)
+                cached = separate(ids[:, 4:], cache=prefix.cache, use_cache=True)
+            torch.testing.assert_close(full.forecast, cached.forecast, rtol=0.02, atol=0.01)
+            mask = batch["series_mask"].clone()
+            mask[0, :16] = False
+            separate.train()
+            with torch.autocast("cpu", dtype=torch.bfloat16):
+                training = separate(series=batch["series"], series_mask=mask,
+                                    forecast_targets=batch["forecast_targets"])
+            training.loss.backward()
+            for projection in (separate.forecast_adapter.proj, separate.forecast_adapter.missing_proj):
+                self.assertTrue(torch.isfinite(projection.weight.grad).all())
+                self.assertGreater(projection.weight.grad.abs().sum().item(), 0)
+            save_checkpoint(path, separate)
+            restored, _ = load_checkpoint(path)
+            torch.testing.assert_close(separate.forecast_adapter.missing_proj.weight,
+                                       restored.forecast_adapter.missing_proj.weight, rtol=0, atol=0)
+            disabled, _ = load_checkpoint(path, overrides={"forecast_adapter_separate_missing": False})
+            self.assertIsNone(disabled.forecast_adapter.missing_proj)
+            self.assertEqual(disabled.forecast_adapter.proj.weight.count_nonzero().item(), 0)
+            length_only, _ = load_checkpoint(path, overrides={"forecast_adapter_separate_missing": False,
+                                                             "forecast_adapter_missing_gate": False})
+            torch.testing.assert_close(length_only.forecast_adapter.proj.weight,
+                                       separate.forecast_adapter.proj.weight, rtol=0, atol=0)
+            with self.assertRaises(ValueError):
+                replace(config, forecast_adapter_separate_missing=True)
+
     def test_changing_feature_semantics_resets_only_adapter_and_roundtrips_cache(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "absolute.pt"

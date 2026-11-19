@@ -79,6 +79,9 @@ class Chimera(nn.Module):
         if self.forecast_adapter is not None:
             nn.init.zeros_(self.forecast_adapter.proj.weight)
             nn.init.zeros_(self.forecast_adapter.proj.bias)
+            if self.forecast_adapter.missing_proj is not None:
+                nn.init.zeros_(self.forecast_adapter.missing_proj.weight)
+                nn.init.zeros_(self.forecast_adapter.missing_proj.bias)
         for parameter in (self.modality, self.task_queries, self.resampler.latents,
                           self.resampler.null_context, self.vision.position):
             nn.init.normal_(parameter, std=0.02)

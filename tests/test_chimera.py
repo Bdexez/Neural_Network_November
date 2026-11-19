@@ -121,6 +121,26 @@ class ChimeraTests(unittest.TestCase):
         torch.testing.assert_close(first.classification_logits, second.classification_logits, atol=1e-6, rtol=1e-5)
         torch.testing.assert_close(first.expert_usage, second.expert_usage)
 
+    def test_auxiliary_text_loss_and_gradients_ignore_empty_padded_horizons(self):
+        model = Chimera(replace(self.config, prediction_steps=5)).eval()
+        ids = torch.tensor([[1, 23, 24]])
+        attention = torch.ones_like(ids, dtype=torch.bool)
+        plain = model(ids, attention_mask=attention, labels=ids)
+        plain.loss.backward()
+        gradients = {name: parameter.grad.clone() for name, parameter in model.named_parameters()
+                     if parameter.grad is not None}
+        model.zero_grad(set_to_none=True)
+        padded = torch.nn.functional.pad(ids, (0, 5))
+        padded_mask = torch.nn.functional.pad(attention, (0, 5), value=False)
+        result = model(padded, attention_mask=padded_mask, labels=padded)
+        result.loss.backward()
+        self.assertGreater(plain.losses["multi_token"].item(), 0)
+        torch.testing.assert_close(plain.losses["multi_token"], result.losses["multi_token"], rtol=1e-5, atol=1e-6)
+        torch.testing.assert_close(plain.loss, result.loss, rtol=1e-5, atol=1e-6)
+        for name, parameter in model.named_parameters():
+            if name in gradients:
+                torch.testing.assert_close(gradients[name], parameter.grad, rtol=1e-4, atol=1e-6, msg=name)
+
     def test_series_padding_and_missing_values(self):
         self.model.eval()
         batch = self.inputs()

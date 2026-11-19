@@ -258,14 +258,17 @@ class Chimera(nn.Module):
             shifted = targets[:, 1:].masked_fill(~valid[:, :-1], -100)
             losses["text"] = masked_cross_entropy(logits[:, :-1], shifted)
             total = total + c.text_weight * losses["text"]
-            mtp_losses = []
+            mtp_losses, mtp_active = [], []
             for distance, head in enumerate(self.future_heads, start=2):
                 if hidden.size(1) > distance:
                     future_logits = self.lm_head(head(hidden[:, :-distance]))
                     future_targets = targets[:, distance:].masked_fill(~valid[:, :-distance], -100)
                     mtp_losses.append(masked_cross_entropy(future_logits, future_targets))
+                    mtp_active.append((future_targets != -100).any())
             if mtp_losses:
-                losses["multi_token"] = torch.stack(mtp_losses).mean()
+                # Les horizons sans cible ne doivent pas diluer les horizons actifs.
+                active = torch.stack(mtp_active).to(dtype=mtp_losses[0].dtype)
+                losses["multi_token"] = (torch.stack(mtp_losses) * active).sum() / active.sum().clamp_min(1)
                 total = total + c.mtp_weight * losses["multi_token"]
         if class_labels is not None:
             losses["classification"] = masked_cross_entropy(class_logits, class_labels)

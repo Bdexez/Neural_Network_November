@@ -336,6 +336,14 @@ class Chimera(nn.Module):
                 if temperature == 0:
                     next_token = scores.argmax(-1)
                 else:
+                    # Centrer avant division évite les +inf lorsque la température
+                    # est petite ; FP64 représente les températures hors plage FP32.
+                    if not torch.finfo(torch.float32).tiny <= temperature <= torch.finfo(torch.float32).max:
+                        scores = scores.double()
+                    peak = scores.amax(-1, keepdim=True)
+                    if not torch.isfinite(peak).all():
+                        raise FloatingPointError("Les logits générables doivent avoir un maximum fini")
+                    scores = scores - peak
                     scores = scores / temperature
                     if top_k:
                         threshold = scores.topk(min(top_k, scores.size(-1)), dim=-1).values[:, -1:]

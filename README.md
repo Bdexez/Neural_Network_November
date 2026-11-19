@@ -269,6 +269,8 @@ Génération avec cache clé/valeur **et** état de convolution :
 
 `model.generate(...)` accepte aussi `images=` et `series=` ; le contexte est calculé une seule fois. Température, top-k, top-p et arrêt EOS sont disponibles. Les batches de génération de longueurs différentes utilisent du padding à gauche. Le cache est réservé à l'inférence et sa longueur reste limitée par `max_seq_len`.
 
+Pour l'échantillonnage, les logits sont centrés avant la division par la température ; les températures positives hors plage FP32 utilisent FP64. Une température nulle conserve la sélection gloutonne. Un maximum de logits non fini pendant l'échantillonnage produit une erreur explicite.
+
 `load_checkpoint` utilise le mappage mémoire et une initialisation sur `meta` pour charger les poids sans copie complète et sans initialisation aléatoire préalable. Les pages sont lues à la demande ; la première inférence utilise ensuite la mémoire des poids consultés. `mmap=False` permet de charger un ancien fichier PyTorch qui n'utilise pas le format ZIP.
 
 ## Fichiers utiles

@@ -7,6 +7,7 @@ from pathlib import Path
 import pickle
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import torch
 from torch.utils.data import DataLoader
@@ -208,6 +209,24 @@ class ImprovementTests(unittest.TestCase):
                     raise RuntimeError("interrupted")
             self.assertEqual(path.read_text(), "previous\n")
             self.assertEqual(list(Path(directory).glob("*.tmp")), [])
+
+    def test_checkpoint_keeps_previous_files_on_success_and_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "model.pt"
+            existing = root / "model.pt.tmp"
+            existing.write_bytes(b"unrelated")
+            model = Chimera(self.config)
+            save_checkpoint(path, model, step=1)
+            original = path.read_bytes()
+            self.assertEqual(existing.read_bytes(), b"unrelated")
+            with patch("chimera.training.torch.save", side_effect=RuntimeError("interrupted")):
+                with self.assertRaisesRegex(RuntimeError, "interrupted"):
+                    save_checkpoint(path, model, step=2)
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(existing.read_bytes(), b"unrelated")
+            self.assertEqual(list(root.glob("model.pt.*.tmp")), [])
+            self.assertEqual(load_checkpoint(path)[1]["step"], 1)
 
     def test_best_checkpoint_and_exact_resume_with_early_stopping(self):
         with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):

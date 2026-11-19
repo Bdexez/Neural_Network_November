@@ -6,6 +6,7 @@ import math
 import os
 from pathlib import Path
 import random
+import tempfile
 import time
 import warnings
 
@@ -60,12 +61,16 @@ def save_checkpoint(path, model, *, optimizer=None, scaler=None, step=0, trainer
         payload["scaler"] = scaler.state_dict()
     if rank_rng is not None:
         payload["rank_rng"] = rank_rng
-    temporary = path.with_name(path.name + ".tmp")
+    temporary = None
     try:
-        torch.save(payload, temporary)
+        with tempfile.NamedTemporaryFile(mode="w+b", dir=path.parent, prefix=path.name + ".",
+                                         suffix=".tmp", delete=False) as stream:
+            temporary = Path(stream.name)
+            torch.save(payload, stream)
         os.replace(temporary, path)
     finally:
-        temporary.unlink(missing_ok=True)
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def load_checkpoint(path, device="cpu", *, mmap=True, overrides=None):

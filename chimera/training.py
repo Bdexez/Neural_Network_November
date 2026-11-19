@@ -20,6 +20,7 @@ from .augmentation import SeriesAffineAugmentation, SeriesAugmentation
 from .data import JointDataset, collate_records, synthetic_batch
 from .model import Chimera
 from .modalities import MODALITIES, balanced_modalities, has_observed_targets, keep_modalities
+from .observed_objective import observed_objective, target_counts
 from .evaluation import evaluate
 from .modules import RotaryEmbedding
 
@@ -155,9 +156,12 @@ class DistributedTrainingModel(torch.nn.Module):
         super().__init__()
         self.model = model
 
-    def forward(self, **batch):
+    def forward(self, *, local_counts=None, total_counts=None, accumulation=1, world=1, **batch):
         output = self.model(**batch)
-        return output.loss, {name: value.detach() for name, value in output.losses.items()}, output.expert_usage.detach()
+        loss = (output.loss if total_counts is None else
+                observed_objective(output, local_counts, total_counts, self.model.config,
+                                   world=world, accumulation=accumulation))
+        return loss, {name: value.detach() for name, value in output.losses.items()}, output.expert_usage.detach()
 
 
 def train(args, config):
@@ -210,6 +214,12 @@ def train(args, config):
     if args.resume and args.monitor != previous_monitor:
         raise ValueError(f"Reprise : monitor diffère du checkpoint ({previous_monitor!r})")
     maximize = args.monitor == "accuracy"
+    previous_normalization = previous.get("loss_normalization", "batch")
+    args.loss_normalization = getattr(args, "loss_normalization", None) or previous_normalization
+    if args.loss_normalization not in ("batch", "observed"):
+        raise ValueError("loss_normalization doit être batch ou observed")
+    if args.resume and args.loss_normalization != previous_normalization:
+        raise ValueError(f"Reprise : loss_normalization diffère du checkpoint ({previous_normalization!r})")
     augmentation_options = {}
     previous_augmentation = previous.get("series_augmentation", {})
     for name, default in SeriesAugmentation().to_dict().items():
@@ -234,7 +244,7 @@ def train(args, config):
     augment_affine = SeriesAffineAugmentation(**affine_options)
     args.shuffle = (previous.get("shuffle", False) if args.resume else True) if args.shuffle is None else args.shuffle
     keys = ("steps", "batch_size", "accumulation", "seed", "lr", "warmup", "weight_decay",
-            "amp", "data", "modality_dropout", "modality_policy", "shuffle", "val_data", "eval_every", "patience", "min_delta", "monitor")
+            "amp", "data", "modality_dropout", "modality_policy", "shuffle", "val_data", "eval_every", "patience", "min_delta", "monitor", "loss_normalization")
     trainer = {key: getattr(args, key) for key in keys}
     trainer["initialization"] = previous.get("initialization", initialization)
     trainer["series_augmentation"] = augment_series.to_dict()
@@ -335,7 +345,8 @@ def train(args, config):
         for group in optimizer.param_groups:
             group["lr"] = learning_rate(step, args.steps, args.lr, args.warmup) * group["lr_scale"]
         metrics, expert_usage, modality_batches, series_statistics = {}, None, {}, {}
-        for micro in range(args.accumulation):
+        def prepare_microbatch(micro):
+            nonlocal epoch, iterator
             if iterator is None:
                 batch = synthetic_batch(config, batch_size=args.batch_size,
                                         seed=args.seed + (step * args.accumulation + micro) * world + rank,
@@ -351,11 +362,12 @@ def train(args, config):
                 batch = {key: value.to(device) for key, value in batch.items()}
             index = (step * args.accumulation + micro) * world + rank
             batch = augment_series(batch, index=index, seed=args.seed)
-            if not has_observed_targets(batch, prediction_steps=config.prediction_steps):
+            supervised = has_observed_targets(batch, prediction_steps=config.prediction_steps)
+            if not supervised and args.loss_normalization == "batch":
                 raise ValueError("Le batch ne contient aucune cible supervisée observée")
-            if args.modality_policy == "balanced":
+            if supervised and args.modality_policy == "balanced":
                 batch = balanced_modalities(batch, index, args.seed, prediction_steps=config.prediction_steps)
-            elif args.modality_dropout:
+            elif supervised and args.modality_dropout:
                 batch = drop_modalities(batch, args.modality_dropout, prediction_steps=config.prediction_steps)
             # Le futur ne doit changer d'unités que si l'historique permettant
             # de connaître ces unités est encore présent dans les entrées.
@@ -374,20 +386,46 @@ def train(args, config):
                                                            & (series != original_series)).any(dim=(1, 2)).sum().item())
                 for name, value in statistics.items():
                     series_statistics[name] = series_statistics.get(name, 0) + value
+            return batch
+
+        batches = (prepare_microbatch(micro) for micro in range(args.accumulation))
+        total_counts = None
+        if args.loss_normalization == "observed":
+            batches = list(batches)
+            local_counts = [target_counts(batch, config.prediction_steps) for batch in batches]
+            total_counts = torch.stack(local_counts).sum(0)
+            if world > 1:
+                dist.all_reduce(total_counts, op=dist.ReduceOp.SUM)
+            if not total_counts.any().item():
+                raise ValueError("L'étape ne contient aucune cible supervisée observée")
+        else:
+            local_counts = [None] * args.accumulation
+        for micro, (batch, counts) in enumerate(zip(batches, local_counts)):
             sync = wrapped.no_sync() if world > 1 and micro + 1 < args.accumulation else nullcontext()
             with sync, autocast():
-                result = wrapped(**batch)
+                if world > 1 and total_counts is not None:
+                    result = wrapped(local_counts=counts, total_counts=total_counts,
+                                     accumulation=args.accumulation, world=world, **batch)
+                else:
+                    result = wrapped(**batch)
                 if world > 1:
                     batch_loss, batch_losses, batch_usage = result
                 else:
                     batch_loss, batch_losses, batch_usage = result.loss, result.losses, result.expert_usage
-                if batch_loss is None:
+                if batch_loss is None and total_counts is None:
                     raise ValueError("Aucune cible d'entraînement dans le batch")
-                loss = batch_loss / args.accumulation
+                if total_counts is None:
+                    loss = batch_loss / args.accumulation
+                elif world > 1:
+                    loss = batch_loss
+                else:
+                    loss = observed_objective(result, counts, total_counts, config,
+                                              world=world, accumulation=args.accumulation)
             if not torch.isfinite(loss):
                 raise FloatingPointError(f"Perte non finie à l'étape {step + 1}")
             scaler.scale(loss).backward()
-            metrics["loss"] = metrics.get("loss", 0) + batch_loss.item() / args.accumulation
+            logged_loss = batch_loss.item() / args.accumulation if total_counts is None else loss.item()
+            metrics["loss"] = metrics.get("loss", 0) + logged_loss
             for key, value in batch_losses.items():
                 metrics[key] = metrics.get(key, 0) + value.detach().item() / args.accumulation
             expert_usage = batch_usage

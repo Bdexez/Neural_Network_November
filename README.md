@@ -213,6 +213,8 @@ Le lecteur indexe les positions des lignes et charge les exemples à la demande 
 
 Les textes longs sont tronqués à `max_seq_len` en conservant EOS. Les historiques trop longs sont refusés pour éviter une troncature silencieuse. `null` dans un tableau numérique est converti en valeur manquante par l'outil de génération/chargement ; les tenseurs d'historique acceptent NaN. Les cibles de prévision non finies sont ignorées dans la perte.
 
+Pour les séries d'amplitude courante, les statistiques temporelles sont calculées en FP32 comme auparavant. Si leur amplitude risque de faire déborder la somme des carrés, elles passent en FP64 ; les prévisions associées peuvent alors être en FP64. Les amplitudes dépassant la plage sûre du calcul FP64 sont refusées explicitement. Ce contrôle d'amplitude peut ajouter une synchronisation sur GPU.
+
 Utiliser directement les tenseurs :
 
 ```python

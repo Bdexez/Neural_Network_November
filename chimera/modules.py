@@ -8,6 +8,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from .config import ChimeraConfig
+from .temporal_precision import temporal_work_dtype
 
 
 class RMSNorm(nn.Module):
@@ -255,7 +256,7 @@ class TemporalEncoder(nn.Module):
                                 if config.temporal_statistics else None)
 
     def forward(self, series, valid):
-        series = series.float()
+        series = series.to(dtype=temporal_work_dtype(series, valid))
         observed = torch.isfinite(series) & valid.unsqueeze(-1)
         clean = torch.where(observed, series, 0.0)
         observed_count = observed.sum(1, keepdim=True)

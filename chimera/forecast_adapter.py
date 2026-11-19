@@ -29,7 +29,7 @@ class ForecastAdapter(nn.Module):
         self.proj = nn.Linear(2 * self.context + 4 + config.forecast_horizon, config.forecast_horizon)
 
     def prepare(self, series, valid, mean, scale):
-        series = series.float()
+        series = series.to(dtype=mean.dtype)
         observed = torch.isfinite(series) & valid.unsqueeze(-1)
         clean = torch.where(observed, series, 0.0)
         positions = torch.arange(series.size(1), device=series.device)[None].expand_as(valid)

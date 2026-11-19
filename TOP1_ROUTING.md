@@ -23,6 +23,21 @@ La porte probabiliste ne montre pas de gain général dans cet essai : les MAE s
 
 Les mesures complètes pour les sept combinaisons, commandes, durées et versions sont conservées dans [top1-routing-study.json](artifacts/top1-routing-study.json). Les checkpoints restent locaux sous `runs/`.
 
+## Répartition des experts
+
+Les six checkpoints ont été réévalués sur les mêmes exemples avec les diagnostics de routage. Le nombre effectif d'experts est l'exponentielle de l'entropie des parts de sélection : il vaut quatre pour une répartition uniforme entre les quatre experts et un si un seul est sélectionné. Le tableau donne la moyenne de cette mesure par checkpoint, puis sur les trois seeds ; il ne calcule pas l'entropie des parts moyennées entre seeds.
+
+| Modalités | Mode | Couche 1 | Couche 2 | Couche 3 |
+| --- | --- | ---: | ---: | ---: |
+| Séries seules | `normalized` | 2,11 | 2,02 | 2,54 |
+| Séries seules | `probability` | 2,00 | 1,92 | 1,67 |
+| Texte + image + séries | `normalized` | 3,98 | 3,93 | 3,97 |
+| Texte + image + séries | `probability` | 3,60 | 3,48 | 3,18 |
+
+Dans cet essai, la sélection est donc plus concentrée avec `probability`, particulièrement dans la troisième couche. Cette observation ne démontre pas que la concentration cause les écarts de qualité. Sans texte, le décodeur utilise deux requêtes de tâche par exemple : les séries seules représentent ici 256 tokens routés, contre 2 688 avec les trois modalités. Les deux conditions ne portent donc pas sur les mêmes positions de décodeur. L'expert partagé est exclu de ces statistiques.
+
+Les parts par expert, ratios de charge maximale, écarts-types et effectifs pour chaque condition et seed figurent dans [top1-expert-routing.json](artifacts/top1-expert-routing.json). Les six entraînements répétés pour ces mesures ont produit des tenseurs de poids identiques bit à bit aux entraînements de la comparaison précédente ; les mesures de qualité recalculées sont inchangées.
+
 ```bash
 .venv/bin/python tools/compare_top1_routing.py --output-dir runs/nouveau-top1
 ```

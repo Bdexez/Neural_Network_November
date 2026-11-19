@@ -19,6 +19,29 @@ from chimera.data import synthetic_batch
 from chimera.training import load_checkpoint
 
 
+def aggregate_metrics(runs):
+    aggregate = {}
+    for mode in ("normalized", "probability"):
+        records = [run for run in runs if run["mode"] == mode]
+        aggregate[mode] = {}
+        for modality in records[0]["metrics"]:
+            aggregate[mode][modality] = {}
+            for metric in ("accuracy", "forecast_mae", "text"):
+                values = [run["metrics"][modality].get(metric) for run in records]
+                if all(value is not None for value in values):
+                    aggregate[mode][modality][metric] = dict(
+                        mean=statistics.mean(values),
+                        sample_std=statistics.stdev(values) if len(values) > 1 else None,
+                    )
+            for metric in ("expert_usage", "expert_effective_count", "expert_max_load_ratio"):
+                values = torch.tensor([run["metrics"][modality][metric] for run in records], dtype=torch.float64)
+                aggregate[mode][modality][metric] = dict(
+                    mean=values.mean(0).tolist(),
+                    sample_std=values.std(0, unbiased=True).tolist() if len(values) > 1 else None,
+                )
+    return aggregate
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seeds", type=int, nargs="+", default=[42, 43, 44])
@@ -65,20 +88,7 @@ def main():
                                   series_mae=metrics["series"]["forecast_mae"])), flush=True)
             del model, batches
             gc.collect()
-    aggregate = {}
-    for mode in ("normalized", "probability"):
-        records = [run for run in runs if run["mode"] == mode]
-        aggregate[mode] = {}
-        for modality in records[0]["metrics"]:
-            aggregate[mode][modality] = {}
-            for metric in ("accuracy", "forecast_mae", "text"):
-                values = [run["metrics"][modality].get(metric) for run in records]
-                if all(value is not None for value in values):
-                    aggregate[mode][modality][metric] = dict(
-                        mean=statistics.mean(values),
-                        sample_std=statistics.stdev(values) if len(values) > 1 else None,
-                    )
-    report = dict(settings=vars(args), torch_version=str(torch.__version__), runs=runs, aggregate=aggregate,
+    report = dict(settings=vars(args), torch_version=str(torch.__version__), runs=runs, aggregate=aggregate_metrics(runs),
                   test_seed_start=3100000, test_examples=args.batch_size * args.test_batches,
                   checkpoint_selection="Final step; identical seeds, optimizer steps and batch sizes",
                   scope="Synthetic held-out examples only; results do not establish real-world quality.")

@@ -131,7 +131,7 @@ def main(argv=None):
     training.add_argument("--save-every", type=int, default=25)
     training.add_argument("--log-every", type=int, default=10)
     training.add_argument("--eval-every", type=int, default=25, help="Fréquence des validations et sélection du meilleur modèle")
-    training.add_argument("--monitor", choices=("loss", "text", "classification", "forecast", "forecast_mae", "forecast_rmse", "accuracy"),
+    training.add_argument("--monitor", choices=("loss", "observed_loss", "text", "classification", "forecast", "forecast_mae", "forecast_rmse", "accuracy"),
                           help="Mesure de validation pour best.pt et l'arrêt anticipé ; défaut : loss")
     training.add_argument("--patience", type=int, default=0, help="Validations sans progrès avant arrêt ; 0 désactive l'arrêt")
     training.add_argument("--min-delta", type=float, default=0.0, help="Amélioration minimale de la mesure de validation")

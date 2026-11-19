@@ -145,6 +145,18 @@ def evaluate(model, batches, amp="none", *, calibration=None):
         if "classification" in counts:
             result["classified_examples"] = class_count
             result["accuracy"] = correct / class_count if class_count else None
+        if "loss" in result:
+            # Chaque tâche est d'abord agrégée selon son nombre de cibles ; les
+            # termes auxiliaires conservent leur agrégation par lot existante.
+            supervised = ("text", "classification", "forecast", "multi_token")
+            terms = (("text", "text_weight"), ("classification", "classification_weight"),
+                     ("forecast", "forecast_weight"), ("multi_token", "mtp_weight"),
+                     ("balance", "balance_weight"), ("router_z", "router_z_weight"),
+                     ("alignment", "alignment_weight"))
+            result["observed_loss"] = (
+                sum(getattr(model.config, weight) * result[name] for name, weight in terms
+                    if result.get(name) is not None)
+                if any(result.get(name) is not None for name in supervised) else None)
         if "forecast" in counts:
             result["forecast_observations"] = forecast_count
             result["forecast_mae"] = absolute / forecast_count if forecast_count else None

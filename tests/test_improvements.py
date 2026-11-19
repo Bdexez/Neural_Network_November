@@ -230,6 +230,33 @@ class ImprovementTests(unittest.TestCase):
         self.assertEqual(full["forecast_observations"], 45)
         self.assertEqual(len(full["forecast_mae_by_horizon"]), self.config.forecast_horizon)
 
+    def test_observed_validation_loss_weights_targets_across_batches(self):
+        config = replace(self.config, alignment_weight=0, balance_weight=0, router_z_weight=0)
+        model = Chimera(config).eval()
+        batch = synthetic_batch(config, batch_size=6, seed=2039)
+        batch["forecast_targets"][0] += 30
+        batch["forecast_targets"][1:4] = float("nan")
+        batch["class_labels"][1:4] = -100
+        batch["labels"][1:4] = -100
+        chunks = [{key: value[section] for key, value in batch.items()}
+                  for section in (slice(0, 1), slice(1, 4), slice(4, 6))]
+        full, split = evaluate(model, [batch]), evaluate(model, chunks)
+        expected = (config.text_weight * split["text"] + config.classification_weight * split["classification"]
+                    + config.forecast_weight * split["forecast"] + config.mtp_weight * split["multi_token"])
+        self.assertAlmostEqual(split["observed_loss"], expected, places=6)
+        self.assertAlmostEqual(full["observed_loss"], split["observed_loss"], places=5)
+        self.assertGreater(abs(full["loss"] - split["loss"]), 1)
+
+    def test_observed_validation_loss_includes_reported_auxiliary_terms(self):
+        model = Chimera(self.config).eval()
+        batch = synthetic_batch(self.config, batch_size=3, seed=2040)
+        report = evaluate(model, [batch])
+        weights = {"text": "text_weight", "classification": "classification_weight",
+                   "forecast": "forecast_weight", "multi_token": "mtp_weight", "balance": "balance_weight",
+                   "router_z": "router_z_weight", "alignment": "alignment_weight"}
+        expected = sum(report[name] * getattr(self.config, weight) for name, weight in weights.items())
+        self.assertAlmostEqual(report["observed_loss"], expected, places=6)
+
     def test_expert_usage_is_weighted_by_valid_tokens(self):
         class FixedRouting(torch.nn.Module):
             def __init__(self):
@@ -301,6 +328,7 @@ class ImprovementTests(unittest.TestCase):
         self.assertIsNone(report["forecast_mae"])
         self.assertIsNone(report["accuracy"])
         self.assertIsNone(report["byte_perplexity"])
+        self.assertIsNone(report["observed_loss"])
 
     def test_evaluation_counts_observed_auxiliary_text_targets(self):
         model = Chimera(self.config)
@@ -310,9 +338,11 @@ class ImprovementTests(unittest.TestCase):
         self.assertEqual(report["text_tokens"], 0)
         self.assertEqual(report["multi_token_targets"], 1)
         self.assertIsNone(report["text"])
+        self.assertIsNotNone(report["observed_loss"])
         short = evaluate(model, [dict(input_ids=torch.tensor([[1]]), labels=torch.tensor([[1]]))])
         self.assertEqual(short["multi_token_targets"], 0)
         self.assertIsNone(short["multi_token"])
+        self.assertIsNone(short["observed_loss"])
 
     def test_auxiliary_text_metric_weights_targets_per_horizon_across_batches(self):
         model = Chimera(replace(self.config, prediction_steps=5)).eval()

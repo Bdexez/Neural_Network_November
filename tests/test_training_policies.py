@@ -137,6 +137,33 @@ class TrainingPolicyTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "forecast_mae"):
                 main(common + ["--monitor", "forecast_mae"])
 
+    def test_observed_loss_monitor_selects_checkpoint_and_resumes_exactly(self):
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
+            root = Path(directory)
+            data = root / "validation.jsonl"
+            rows = [dict(series=[[i, i + 1, i + 2]], class_label=i % 2,
+                         future=[[i + j, i + j + 1, i + j + 2] for j in range(12)]) for i in range(4)]
+            del rows[1]["future"]
+            rows[2]["class_label"] = -100
+            rows[3]["future"][3][1] = None
+            data.write_text("\n".join(json.dumps(row) for row in rows))
+            common = ["--threads", "2", "train", "--preset", "tiny", "--steps", "3", "--batch-size", "2",
+                      "--eval-every", "1", "--val-data", str(data), "--monitor", "observed_loss"]
+            full, split = root / "full", root / "split"
+            main(common + ["--output", str(full)])
+            main(common + ["--output", str(split), "--stop-after", "1"])
+            main(common + ["--output", str(split), "--resume", str(split / "latest.pt")])
+            model_a, first = load_checkpoint(full / "latest.pt")
+            model_b, resumed = load_checkpoint(split / "latest.pt")
+            self.assertEqual(resumed["trainer"]["monitor"], "observed_loss")
+            self.assertEqual(first["trainer"]["validation_state"], resumed["trainer"]["validation_state"])
+            for name, value in model_a.state_dict().items():
+                torch.testing.assert_close(value, model_b.state_dict()[name], rtol=0, atol=0, msg=name)
+            validations = [json.loads(line) for line in (full / "validation.jsonl").read_text().splitlines()]
+            self.assertTrue(all(row["monitor_value"] == row["observed_loss"] for row in validations))
+            best = min(validations, key=lambda row: row["observed_loss"])
+            self.assertEqual(load_checkpoint(full / "best.pt")[1]["step"], best["step"])
+
     def test_legacy_resume_without_monitor_uses_loss(self):
         with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
             root = Path(directory)

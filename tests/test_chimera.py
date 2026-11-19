@@ -315,6 +315,17 @@ class ChimeraTests(unittest.TestCase):
         self.assertTrue(self.model.training)
         torch.testing.assert_close(result[:, :4], prompt)
 
+    def test_generation_rejects_unreachable_or_invalid_eos(self):
+        prompt = self.batch["input_ids"][:1, :4]
+        for eos in (0, 1, 3, -1, self.config.vocab_size, 2.5, True):
+            with self.subTest(eos=eos), self.assertRaisesRegex(ValueError, "eos_id"):
+                self.model.generate(prompt, max_new_tokens=1, eos_id=eos)
+        # Un token ordinaire peut être choisi comme fin personnalisée.
+        generated = self.model.generate(prompt, max_new_tokens=1, temperature=0, eos_id=None)
+        eos = generated[0, -1].item()
+        stopped = self.model.generate(prompt, max_new_tokens=5, temperature=0, eos_id=eos)
+        torch.testing.assert_close(stopped, generated)
+
     def test_invalid_inputs_have_explicit_errors(self):
         with self.assertRaises(ValueError):
             self.model()

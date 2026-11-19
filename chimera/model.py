@@ -311,8 +311,9 @@ class Chimera(nn.Module):
             raise ValueError("top_k doit être un entier positif ou nul")
         if input_ids.size(1) + max_new_tokens > self.config.max_seq_len:
             raise ValueError("Prompt + génération dépassent max_seq_len")
-        if eos_id is not None and not 0 <= eos_id < self.config.vocab_size:
-            raise ValueError("eos_id hors vocabulaire")
+        if eos_id is not None and (type(eos_id) is not int or not 0 <= eos_id < self.config.vocab_size
+                                   or eos_id in (0, 1, 3)):
+            raise ValueError("eos_id doit être un entier générable du vocabulaire ou None")
         if "attention_mask" in context:
             mask = context["attention_mask"]
             if not mask[:, -1].bool().all():

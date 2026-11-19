@@ -8,6 +8,8 @@ Choisir le checkpoint définitif, puis préparer un JSONL de calibration contena
 
 La commande [`audit-splits`](README.md#données-et-api) peut repérer des lignes communes et, si les bornes sont fournies, des fenêtres temporelles qui se recouvrent entre ces jeux. Elle ne prouve pas leur indépendance.
 
+Pour partir de séries chronologiques brutes, [`prepare-series`](README.md#données-et-api) produit séparément les fenêtres d'entraînement, de validation, de calibration et de test. Les fenêtres d'un même jeu peuvent rester dépendantes ; la séparation seule ne garantit pas l'échangeabilité requise ci-dessous.
+
 ```bash
 # Ajuster sur des exemples réservés à la calibration
 .venv/bin/python -m chimera --threads 8 calibrate \

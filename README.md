@@ -225,6 +225,21 @@ Le lecteur indexe les positions des lignes et charge les exemples à la demande 
 
 Les textes longs sont tronqués à `max_seq_len` en conservant EOS. Les historiques trop longs sont refusés pour éviter une troncature silencieuse. `null` dans un tableau numérique est converti en valeur manquante par l'outil de génération/chargement ; les tenseurs d'historique acceptent NaN. Les cibles de prévision non finies sont ignorées dans la perte.
 
+Pour construire des fenêtres de séries sans réutiliser de positions entre entraînement, validation, calibration et test, `prepare-series` lit un JSONL contenant une série complète par ligne. Chaque objet contient un `series_id` unique, chaîne non vide ou entier, et `values`, tableau chronologique de vecteurs numériques ou `null`. Chaque vecteur doit avoir le nombre de variables de la configuration ; les valeurs numériques doivent être finies et représentables en FP32.
+
+```bash
+.venv/bin/python -m chimera prepare-series \
+  --input data/series.jsonl --output-dir data/chronological-splits \
+  --config configs/tiny.json --history 32 --stride 12 --gap 12 \
+  --train-end 1000 --validation-end 1300 --calibration-end 1600
+```
+
+Les coupures sont des indices de positions à partir de zéro, avec fin exclusive. Pour chaque série, les périodes sont `[0, train_end[`, `[train_end + gap, validation_end[`, `[validation_end + gap, calibration_end[` et `[calibration_end + gap, longueur[`. Chaque fenêtre inclut `history` pas d'entrée et l'horizon de la configuration ; elle doit tenir entièrement dans une période. `stride` règle son décalage au sein de chaque période. Les fenêtres sans aucune cible observée sont ignorées et comptées ; chaque série doit fournir au moins une fenêtre supervisée par période. La calibration peut demander davantage de cibles observées par horizon et variable.
+
+Le nouveau dossier contient `train.jsonl`, `validation.jsonl`, `calibration.jsonl`, `test.jsonl` et `manifest.json`. Le manifeste contient les réglages, les effectifs et les empreintes ; chaque ligne produite porte aussi `series_id`, `window_start`, `forecast_start` et `window_end`, ignorés par le modèle et utilisables par `audit-splits`. Le dossier de sortie ne doit pas déjà exister. Les fichiers sont préparés avant publication par liens physiques, ce qui nécessite leur prise en charge par le système de fichiers ; le manifeste est publié en dernier. Une interruption brutale peut laisser un dossier incomplet sans manifeste.
+
+Ces indices suivent l'ordre fourni : le programme ne vérifie ni les horodatages ni leur régularité. Pour une chronologie commune entre plusieurs séries, leurs positions doivent correspondre aux mêmes dates et intervalles. Des fenêtres d'un même jeu peuvent se chevaucher, et des groupes différents peuvent être liés ; la séparation des positions ne prouve donc pas l'indépendance statistique ni les hypothèses d'une garantie conformelle.
+
 Avant l'entraînement ou la calibration, comparer les jeux pour repérer des exemples dont les champs choisis sont identiques, même si les lignes sont réordonnées ou le JSON reformaté :
 
 ```bash

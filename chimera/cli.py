@@ -16,6 +16,7 @@ from .data import JointDataset, collate_records, synthetic_batch
 from .forecast_adapter import fit_forecast_adapter
 from .model import Chimera
 from .split_audit import audit_splits
+from .temporal_splits import prepare_temporal_splits
 from .tokenizer import ByteTokenizer
 from .training import evaluate, load_checkpoint, save_checkpoint, train
 
@@ -90,6 +91,17 @@ def main(argv=None):
     audit.add_argument("--max-examples", type=int, default=5, help="Nombre maximal de paires de lignes par diagnostic")
     audit.add_argument("--output", help="Rapport JSON, sinon sortie standard")
     audit.add_argument("--fail-on-overlap", action="store_true", help="Quitter avec le code 2 si un recouvrement est détecté")
+    prepare = commands.add_parser("prepare-series", help="Créer quatre jeux chronologiques sans fenêtres communes")
+    prepare.add_argument("--input", required=True, help="JSONL de séries complètes avec series_id et values")
+    prepare.add_argument("--output-dir", required=True, help="Nouveau dossier pour train, validation, calibration, test")
+    prepare.add_argument("--preset", choices=("tiny", "small", "workstation", "base", "large", "ultra"), default="tiny")
+    prepare.add_argument("--config", help="Configuration JSON définissant variables et horizon")
+    prepare.add_argument("--history", type=int, required=True)
+    prepare.add_argument("--train-end", type=int, required=True, help="Fin exclusive de la période d'entraînement")
+    prepare.add_argument("--validation-end", type=int, required=True, help="Fin exclusive de la période de validation")
+    prepare.add_argument("--calibration-end", type=int, required=True, help="Fin exclusive de la période de calibration")
+    prepare.add_argument("--stride", type=int, default=1, help="Décalage entre fenêtres d'un même jeu")
+    prepare.add_argument("--gap", type=int, default=0, help="Positions exclues après chaque coupure")
     demo = commands.add_parser("demo", help="Exécuter les trois modalités et les trois sorties")
     training = commands.add_parser("train", help="Entraînement conjoint réel")
     for command in (inspect, demo, training):
@@ -208,7 +220,13 @@ def main(argv=None):
     if args.threads < 1:
         parser.error("threads doit être > 0")
     torch.set_num_threads(args.threads)
-    if args.command == "audit-splits":
+    if args.command == "prepare-series":
+        report = prepare_temporal_splits(args.input, args.output_dir, get_config(args), history=args.history,
+                                         train_end=args.train_end, validation_end=args.validation_end,
+                                         calibration_end=args.calibration_end,
+                                         stride=args.stride, gap=args.gap)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    elif args.command == "audit-splits":
         splits = {}
         for entry in args.split:
             name, separator, path = entry.partition("=")

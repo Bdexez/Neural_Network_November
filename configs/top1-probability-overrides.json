@@ -1,0 +1,4 @@
+{
+  "top_k": 1,
+  "top1_gate": "probability"
+}

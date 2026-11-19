@@ -49,6 +49,7 @@ class ChimeraConfig:
     classification_weight: float = 1.0
     forecast_weight: float = 1.0
     gradient_checkpointing: bool = False
+    top1_gate: str = "normalized"
 
     def __post_init__(self):
         integers = (
@@ -71,6 +72,10 @@ class ChimeraConfig:
             raise ValueError("d_model doit être divisible par 4 et n_heads par n_kv_heads")
         if self.top_k > self.n_experts:
             raise ValueError("top_k ne peut pas dépasser n_experts")
+        if self.top1_gate not in ("normalized", "probability"):
+            raise ValueError("top1_gate doit être normalized ou probability")
+        if self.top1_gate == "probability" and (self.top_k != 1 or self.n_experts < 2):
+            raise ValueError("top1_gate probability nécessite top_k=1 et au moins deux experts")
         if self.image_size % self.patch_size:
             raise ValueError("image_size doit être divisible par patch_size")
         if (type(self.forecast_adapter_context) is not int

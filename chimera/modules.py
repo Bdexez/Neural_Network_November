@@ -173,6 +173,7 @@ class SparseMoE(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.n_experts, self.top_k = config.n_experts, config.top_k
+        self.top1_gate = config.top1_gate
         self.router = nn.Linear(config.d_model, config.n_experts, bias=False)
         self.experts = nn.ModuleList([
             SwiGLU(config.d_model, config.hidden_dim) for _ in range(config.n_experts)
@@ -191,7 +192,8 @@ class SparseMoE(nn.Module):
             scores = F.linear(tokens.float(), self.router.weight.float())
             probs = scores.softmax(-1)
         weights, selected = probs.topk(self.top_k, dim=-1)
-        weights = weights / weights.sum(-1, keepdim=True)
+        if self.top_k != 1 or self.top1_gate == "normalized":
+            weights = weights / weights.sum(-1, keepdim=True)
         mixed = self.shared(tokens)
         for expert_id, expert in enumerate(self.experts):
             rows, slots = torch.where(selected == expert_id)

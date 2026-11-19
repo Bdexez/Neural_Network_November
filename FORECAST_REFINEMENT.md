@@ -16,7 +16,7 @@ Le défaut `forecast_adapter_context: 0` désactive le module. Son activation de
 
 `forecast_adapter_missing_gate: true` permet aussi à la correction d'agir sur un historique de longueur complète contenant des valeurs manquantes. Pour chaque variable, la porte est le maximum de la porte de longueur habituelle et de la fraction de valeurs non finies parmi les positions valides. Une variable sans aucune observation reçoit une porte nulle ; le padding ne compte pas comme valeur manquante. Une variable complètement observée dans un historique d'au moins 32 positions reste inchangée. La correction utilise les mêmes caractéristiques et n'ajoute aucun paramètre.
 
-À l'ajustement, seules les variables dont la porte est strictement positive et dont la cible est finie contribuent à la régression de chaque horizon. Changer ce réglage sur un checkpoint existant réinitialise l'adaptateur pour éviter de réutiliser des coefficients ajustés pour une autre porte ; les autres poids sont conservés. Le défaut `false` conserve le comportement historique. La commande suivante active cette porte et ajuste de nouveaux coefficients :
+À l'ajustement, seules les variables dont la porte est strictement positive et dont la cible est finie contribuent à la régression de chaque horizon. Changer ce réglage sur un checkpoint existant réinitialise l'adaptateur lorsque la sémantique de sa branche change ; les autres poids sont conservés. Le défaut `false` conserve le comportement historique. La commande suivante active cette porte et ajuste de nouveaux coefficients :
 
 ```bash
 .venv/bin/python -m chimera refine-forecast \
@@ -24,7 +24,7 @@ Le défaut `forecast_adapter_context: 0` désactive le module. Son activation de
   --context 8 --missing-gate --output runs/forecast-missing-gate.pt
 ```
 
-Sans `--missing-gate` ni `--no-missing-gate`, la commande conserve le réglage du parent. Les exemples d'ajustement doivent contenir des historiques représentatifs des trous rencontrés en utilisation. Un nouveau checkpoint nécessite une nouvelle calibration des intervalles sur des données réservées.
+Sans `--missing-gate` ni `--no-missing-gate`, la commande conserve le réglage du parent, sauf si `--separate-missing` active aussi cette porte. Les exemples d'ajustement doivent contenir des historiques représentatifs des trous rencontrés en utilisation. Un nouveau checkpoint nécessite une nouvelle calibration des intervalles sur des données réservées.
 
 ### Mesure synthétique
 
@@ -46,6 +46,40 @@ La nouvelle porte réduit la MAE à 32 pas masqués mais la dégrade dans plusie
 .venv/bin/python tools/benchmark_missing_gate.py \
   --checkpoint runs/joint-affine-pilot/control/latest.pt \
   --output runs/missing-gate-study.json
+```
+
+### Branches distinctes pour historiques courts et longs incomplets
+
+L'option `--separate-missing` ajoute une deuxième projection de 396 paramètres. La projection historique s'applique aux historiques plus courts que la référence. La nouvelle s'applique aux historiques d'au moins la longueur de référence, avec une porte égale à la fraction manquante de chaque variable ; elle reste inactive si cette variable est entièrement absente. Les deux projections sont initialisées à zéro et n'agissent jamais ensemble pour une même série. L'option active aussi la porte de valeurs manquantes.
+
+L'ajustement ridge calcule des statistiques et des coefficients séparés pour les deux branches. Si une branche ne reçoit aucun exemple utilisable, ses coefficients sont conservés et le rapport indique `fitted: false`. Si elle reçoit des données mais aucune cible pour un horizon, l'opération échoue avant toute modification. Passer d'une porte de longueur existante à ces deux branches conserve la projection de longueur lorsque contexte et caractéristiques sont identiques ; la nouvelle projection est initialisée à zéro. Passer depuis la porte partagée précédente réinitialise les deux projections, dont les rôles ont changé. Une calibration des intervalles doit être réajustée pour le nouveau checkpoint.
+
+```bash
+.venv/bin/python -m chimera refine-forecast \
+  --checkpoint runs/joint-affine-pilot/control/latest.pt --data data/ajustement.jsonl \
+  --context 8 --separate-missing --output runs/forecast-separate-missing.pt
+```
+
+Une nouvelle comparaison utilise le même checkpoint `tiny`, mais de nouvelles plages de seeds : 2 048 exemples d'ajustement et 512 exemples de test par condition, distincts de l'essai précédent. Les trois variantes voient les mêmes exemples d'ajustement et de test. Les valeurs sont les MAE de la médiane ; la variante à branches distinctes utilise deux fois plus de paramètres dans l'adaptateur.
+
+| Historique | Séries : longueur | Séries : porte partagée | Séries : branches distinctes | Trois modalités : longueur | Trois modalités : branches distinctes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 32 pas complets | 0,2411 | 0,2411 | 0,2411 | 0,2386 | 0,2386 |
+| 32 pas, 10 % masqués | 0,2559 | 0,2471 | 0,2401 | 0,2637 | 0,2412 |
+| 32 pas, 30 % masqués | 0,3289 | 0,2958 | 0,2780 | 0,3401 | 0,2793 |
+| 16 pas | 0,1943 | 0,1905 | 0,1943 | 0,1783 | 0,1783 |
+| 8 pas | 0,2167 | 0,2390 | 0,2167 | 0,2092 | 0,2092 |
+| 16 pas, 30 % masqués | 0,2925 | 0,3075 | 0,2925 | 0,2642 | 0,2642 |
+| 8 pas, 30 % masqués | 0,3523 | 0,3564 | 0,3523 | 0,3405 | 0,3405 |
+
+Dans cet essai, la branche longue améliore les historiques masqués et la branche courte retrouve exactement l'ajustement de la porte de longueur, car elle utilise les mêmes exemples et le même objectif. Cela ne garantit pas ces gains pour d'autres distributions ou un entraînement conjoint du réseau. Les données sont synthétiques, les masques indépendants des valeurs et un seul checkpoint est étudié. Les [mesures complètes](artifacts/separate-missing-gate-study.json) contiennent les couvertures brutes, les seeds et l'empreinte du checkpoint. Reproduction :
+
+```bash
+.venv/bin/python tools/benchmark_missing_gate.py \
+  --checkpoint runs/joint-affine-pilot/control/latest.pt \
+  --train-seed 26000000 --train-mask-seed 27000000 \
+  --test-seed 28000000 --test-mask-seed 29000000 \
+  --output runs/separate-missing-gate-study.json
 ```
 
 ## Ajustement depuis un JSONL

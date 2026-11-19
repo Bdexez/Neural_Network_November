@@ -156,6 +156,15 @@ class ImprovementTests(unittest.TestCase):
         self.assertIsNone(report["accuracy"])
         self.assertIsNone(report["byte_perplexity"])
 
+    def test_evaluation_counts_observed_auxiliary_text_targets(self):
+        model = Chimera(self.config)
+        batch = dict(input_ids=torch.tensor([[1, 0, 7]]), labels=torch.tensor([[-100, -100, 7]]),
+                     attention_mask=torch.tensor([[1, 0, 1]]))
+        report = evaluate(model, [batch])
+        self.assertEqual(report["text_tokens"], 0)
+        self.assertEqual(report["multi_token_targets"], 1)
+        self.assertIsNone(report["text"])
+
     def test_grad_scaler_skips_overflow_then_recovers(self):
         model = torch.nn.Linear(1, 1, bias=False)
         optimizer = torch.optim.SGD(model.parameters(), lr=0.1)

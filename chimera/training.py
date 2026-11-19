@@ -170,6 +170,11 @@ def train(args, config):
     args.modality_policy = args.modality_policy or previous_policy
     if args.resume and args.modality_policy != previous_policy:
         raise ValueError(f"Reprise : modality_policy diffère du checkpoint ({previous_policy!r})")
+    previous_monitor = previous.get("monitor", "loss")
+    args.monitor = getattr(args, "monitor", None) or previous_monitor
+    if args.resume and args.monitor != previous_monitor:
+        raise ValueError(f"Reprise : monitor diffère du checkpoint ({previous_monitor!r})")
+    maximize = args.monitor == "accuracy"
     augmentation_options = {}
     previous_augmentation = previous.get("series_augmentation", {})
     for name, default in SeriesAugmentation().to_dict().items():
@@ -194,7 +199,7 @@ def train(args, config):
     augment_affine = SeriesAffineAugmentation(**affine_options)
     args.shuffle = (previous.get("shuffle", False) if args.resume else True) if args.shuffle is None else args.shuffle
     keys = ("steps", "batch_size", "accumulation", "seed", "lr", "warmup", "weight_decay",
-            "amp", "data", "modality_dropout", "modality_policy", "shuffle", "val_data", "eval_every", "patience", "min_delta")
+            "amp", "data", "modality_dropout", "modality_policy", "shuffle", "val_data", "eval_every", "patience", "min_delta", "monitor")
     trainer = {key: getattr(args, key) for key in keys}
     trainer["initialization"] = previous.get("initialization", initialization)
     trainer["series_augmentation"] = augment_series.to_dict()
@@ -208,7 +213,8 @@ def train(args, config):
         for name, current in trainer.items():
             if name in previous and previous[name] != current:
                 raise ValueError(f"Reprise : {name} diffère du checkpoint ({previous[name]!r})")
-    state = dict(previous.get("validation_state", {"best_loss": float("inf"), "bad_evaluations": 0, "best_step": None}))
+    initial_best = float("-inf") if maximize else float("inf")
+    state = dict(previous.get("validation_state", {"best_loss": initial_best, "bad_evaluations": 0, "best_step": None}))
     trainer["validation_state"] = state
     end_step = min(args.steps, args.stop_after) if args.stop_after is not None else args.steps
     if end_step < start or end_step < 1:
@@ -338,15 +344,21 @@ def train(args, config):
         if validation_event:
             if rank == 0:
                 report = evaluate(model, val, args.amp)
-                if "loss" not in report or not math.isfinite(report["loss"]):
-                    raise ValueError("Le jeu de validation doit fournir une perte supervisée finie")
+                observed = sum(report.get(name, 0) for name in
+                               ("text_tokens", "multi_token_targets", "classified_examples", "forecast_observations"))
+                if not observed:
+                    raise ValueError("Le jeu de validation ne contient aucune cible supervisée observée")
+                score = report.get(args.monitor)
+                if score is None or not math.isfinite(score):
+                    raise ValueError(f"La mesure de validation {args.monitor} est absente ou non finie")
                 last_evaluated = last_step
-                improved = report["loss"] < state["best_loss"]
-                significant = report["loss"] < state.get("reference_loss", state["best_loss"]) - args.min_delta
+                reference = state.get("reference_loss", state["best_loss"])
+                improved = score > state["best_loss"] if maximize else score < state["best_loss"]
+                significant = score > reference + args.min_delta if maximize else score < reference - args.min_delta
                 if improved:
-                    state.update(best_loss=report["loss"], best_step=last_step)
+                    state.update(best_loss=score, best_step=last_step)
                 if significant:
-                    state.update(reference_loss=report["loss"], bad_evaluations=0)
+                    state.update(reference_loss=score, bad_evaluations=0)
                 else:
                     state["bad_evaluations"] += 1
                 if improved:
@@ -354,8 +366,10 @@ def train(args, config):
                                     step=last_step, trainer=trainer)
                 stopped_early = bool(args.patience and state["bad_evaluations"] >= args.patience)
                 with (output_dir / "validation.jsonl").open("a", encoding="utf-8") as stream:
-                    stream.write(json.dumps(dict(step=last_step, improved=improved, **report), allow_nan=False) + "\n")
-                print(json.dumps({"validation_step": last_step, "loss": report["loss"],
+                    stream.write(json.dumps(dict(step=last_step, improved=improved, monitor=args.monitor,
+                                                 monitor_value=score, **report), allow_nan=False) + "\n")
+                print(json.dumps({"validation_step": last_step, "loss": report.get("loss"),
+                                  "monitor": args.monitor, "monitor_value": score,
                                   "best_step": state["best_step"]}), flush=True)
             if world > 1:
                 decision = torch.tensor(int(stopped_early), device=device)
@@ -369,7 +383,8 @@ def train(args, config):
     if rank == 0:
         if last_evaluated != last_step:
             report = evaluate(model, val, args.amp)
-        report = dict(report, step=last_step, best_step=state["best_step"], stopped_early=stopped_early)
+        report = dict(report, step=last_step, best_step=state["best_step"], stopped_early=stopped_early,
+                      monitor=args.monitor, best_monitor_value=state["best_loss"] if state["best_step"] is not None else None)
         (output_dir / "evaluation.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
         print(json.dumps({"evaluation": report}), flush=True)
     if world > 1:

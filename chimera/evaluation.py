@@ -25,6 +25,7 @@ def evaluate(model, batches, amp="none", *, calibration=None):
     calibrated_width = torch.zeros_like(horizon_error)
     calibrated_score = 0.0
     raw_score = 0.0
+    multi_token_count = 0
     autocast = (lambda: nullcontext()) if amp == "none" else (
         lambda: torch.autocast(device.type, dtype=torch.bfloat16 if amp == "bf16" else torch.float16)
     )
@@ -51,6 +52,9 @@ def evaluate(model, batches, amp="none", *, calibration=None):
                     labels = batch["labels"]
                     valid = batch.get("attention_mask", torch.ones_like(labels, dtype=torch.bool)).bool()
                     weights["text"] = ((labels[:, 1:] != -100) & valid[:, 1:] & valid[:, :-1]).sum().item()
+                    for distance in range(2, min(model.config.prediction_steps + 1, labels.size(1))):
+                        multi_token_count += ((labels[:, distance:] != -100) & valid[:, distance:]
+                                              & valid[:, :-distance]).sum().item()
                 if "class_labels" in batch:
                     labels = batch["class_labels"]
                     observed = labels != -100
@@ -93,6 +97,8 @@ def evaluate(model, batches, amp="none", *, calibration=None):
         result = {name: total / counts[name] if counts[name] else None for name, total in totals.items()}
         if "text" in counts:
             result["text_tokens"] = counts["text"]
+            if model.config.prediction_steps > 1:
+                result["multi_token_targets"] = multi_token_count
             result["byte_perplexity"] = math.exp(min(result["text"], 20)) if counts["text"] else None
         if "classification" in counts:
             result["classified_examples"] = class_count

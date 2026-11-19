@@ -87,6 +87,69 @@ class TrainingPolicyTests(unittest.TestCase):
                 main(common + ["--output", str(split), "--resume", str(split / "latest.pt"),
                                "--series-missing-rate", "0"])
 
+    def test_task_metric_selection_resumes_and_maximizes_accuracy(self):
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
+            root = Path(directory)
+            data = root / "validation.jsonl"
+            records = [dict(series=[[i, i + 1, i + 2], [i + 1, i + 2, i + 3]],
+                            class_label=i % 2, future=[[i + step, i + step + 1, i + step + 2]
+                                                        for step in range(12)]) for i in range(3)]
+            data.write_text("\n".join(json.dumps(record) for record in records))
+            common = ["--threads", "2", "train", "--preset", "tiny", "--steps", "4",
+                      "--batch-size", "2", "--eval-every", "1", "--val-data", str(data)]
+            full, split = root / "full", root / "split"
+            main(common + ["--output", str(full), "--monitor", "forecast_mae"])
+            main(common + ["--output", str(split), "--monitor", "forecast_mae", "--stop-after", "2"])
+            main(common + ["--output", str(split), "--resume", str(split / "latest.pt")])
+            a, first = load_checkpoint(full / "latest.pt")
+            b, resumed = load_checkpoint(split / "latest.pt")
+            self.assertEqual(resumed["trainer"]["monitor"], "forecast_mae")
+            self.assertEqual(first["trainer"]["validation_state"], resumed["trainer"]["validation_state"])
+            for name, tensor in a.state_dict().items():
+                torch.testing.assert_close(tensor, b.state_dict()[name], rtol=0, atol=0, msg=name)
+            rows = [json.loads(line) for line in (full / "validation.jsonl").read_text().splitlines()]
+            self.assertTrue(all(row["monitor"] == "forecast_mae" and row["monitor_value"] == row["forecast_mae"]
+                                for row in rows))
+            best = min(rows, key=lambda row: row["forecast_mae"])
+            best_checkpoint = load_checkpoint(full / "best.pt")[1]
+            self.assertEqual(best_checkpoint["step"], best["step"])
+            self.assertEqual(best_checkpoint["trainer"]["validation_state"]["best_loss"], best["forecast_mae"])
+            evaluation = json.loads((full / "evaluation.json").read_text())
+            self.assertEqual(evaluation["best_monitor_value"], best["forecast_mae"])
+            with self.assertRaisesRegex(ValueError, "monitor"):
+                main(common + ["--output", str(split), "--resume", str(split / "latest.pt"), "--monitor", "accuracy"])
+            accuracy = root / "accuracy"
+            main(common + ["--output", str(accuracy), "--monitor", "accuracy"])
+            rows = [json.loads(line) for line in (accuracy / "validation.jsonl").read_text().splitlines()]
+            best = max(rows, key=lambda row: row["accuracy"])
+            self.assertEqual(load_checkpoint(accuracy / "best.pt")[1]["step"], best["step"])
+
+    def test_validation_requires_observed_targets_and_the_monitored_measure(self):
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
+            root = Path(directory)
+            data = root / "validation.jsonl"
+            common = ["--threads", "2", "train", "--preset", "tiny", "--steps", "1", "--batch-size", "1",
+                      "--val-data", str(data), "--output", str(root / "run")]
+            data.write_text(json.dumps(dict(series=[[1, 2, 3]], class_label=-100)))
+            with self.assertRaisesRegex(ValueError, "aucune cible supervisée observée"):
+                main(common)
+            data.write_text(json.dumps(dict(series=[[1, 2, 3]], class_label=0)))
+            with self.assertRaisesRegex(ValueError, "forecast_mae"):
+                main(common + ["--monitor", "forecast_mae"])
+
+    def test_legacy_resume_without_monitor_uses_loss(self):
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
+            root = Path(directory)
+            common = ["--threads", "2", "train", "--steps", "2", "--batch-size", "2",
+                      "--eval-every", "1", "--output", str(root)]
+            main(common + ["--stop-after", "1"])
+            path = root / "latest.pt"
+            payload = torch.load(path, weights_only=True)
+            del payload["trainer"]["monitor"]
+            torch.save(payload, path)
+            main(common + ["--resume", str(path)])
+            self.assertEqual(load_checkpoint(path)[1]["trainer"]["monitor"], "loss")
+
 
 if __name__ == "__main__":
     unittest.main()

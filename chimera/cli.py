@@ -19,6 +19,16 @@ from .tokenizer import ByteTokenizer
 from .training import evaluate, load_checkpoint, save_checkpoint, train
 
 
+def same_file(first, second):
+    """Comparer aussi les chemins existants qui partagent un lien physique."""
+    if Path(first).resolve() == Path(second).resolve():
+        return True
+    try:
+        return os.path.samefile(first, second)
+    except FileNotFoundError:
+        return False
+
+
 @contextmanager
 def prediction_stream(path):
     if path is None:
@@ -229,7 +239,7 @@ def main(argv=None):
         if args.max_new_tokens < 0:
             parser.error("max-new-tokens doit être >= 0")
         sources = (args.data, args.checkpoint, args.calibration)
-        if args.output and any(Path(args.output).resolve() == Path(path).resolve() for path in sources if path):
+        if args.output and any(same_file(args.output, path) for path in sources if path):
             parser.error("Le fichier de prédictions doit être distinct des fichiers d'entrée")
         model, _ = load_checkpoint(args.checkpoint, args.device)
         calibration = ForecastCalibration.load(args.calibration) if args.calibration else None
@@ -238,6 +248,8 @@ def main(argv=None):
             calibration.validate(model.config, amp=args.amp)
         model.eval()
         dataset = JointDataset(args.data, model.config)
+        if dataset.references_image(args.output):
+            parser.error("Le fichier de prédictions doit être distinct des images d'entrée")
         count = 0
         autocast = nullcontext() if args.amp == "none" else torch.autocast(
             torch.device(args.device).type, dtype=torch.bfloat16 if args.amp == "bf16" else torch.float16)
@@ -281,9 +293,10 @@ def main(argv=None):
     elif args.command == "refine-forecast":
         if args.batch_size < 1 or args.context < 1 or not math.isfinite(args.ridge) or args.ridge <= 0:
             parser.error("batch-size, context et ridge doivent être strictement positifs ; ridge doit être fini")
-        inputs = {Path(path).resolve() for path in (args.checkpoint, args.data)}
-        outputs = [Path(path).resolve() for path in (args.output, args.report) if path]
-        if any(path in inputs for path in outputs) or len(set(outputs)) != len(outputs):
+        inputs = (args.checkpoint, args.data)
+        outputs = [path for path in (args.output, args.report) if path]
+        if any(same_file(output, source) for output in outputs for source in inputs) or (
+                len(outputs) == 2 and same_file(*outputs)):
             parser.error("Les sorties doivent être distinctes entre elles et des fichiers d'entrée")
         overrides = {"forecast_adapter_context": args.context}
         if args.relative_features is not None:
@@ -293,6 +306,8 @@ def main(argv=None):
         seed = payload.get("trainer", {}).get("seed", 42)
         del payload
         dataset = JointDataset(args.data, model.config)
+        if any(dataset.references_image(output) for output in outputs):
+            parser.error("Les sorties doivent être distinctes des images d'entrée")
         loader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=collate_records,
                             generator=torch.Generator().manual_seed(0))
         report = fit_forecast_adapter(model, loader, ridge=args.ridge, amp=args.amp)
@@ -316,10 +331,12 @@ def main(argv=None):
         sources = [args.data, args.checkpoint]
         if args.command == "evaluate" and args.calibration:
             sources.append(args.calibration)
-        if args.output and any(Path(args.output).resolve() == Path(path).resolve() for path in sources):
+        if args.output and any(same_file(args.output, path) for path in sources):
             parser.error("Le fichier de sortie doit être distinct des fichiers d'entrée")
         model, _ = load_checkpoint(args.checkpoint, args.device)
         dataset = JointDataset(args.data, model.config)
+        if dataset.references_image(args.output):
+            parser.error("Le fichier de sortie doit être distinct des images d'entrée")
         loader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=collate_records,
                             generator=torch.Generator().manual_seed(0))
         if args.command == "calibrate":
@@ -340,9 +357,8 @@ def main(argv=None):
             report["calibration_data_reused"] = dataset.fingerprint == calibration.dataset_sha256
         content = json.dumps(report, indent=2, allow_nan=False) + "\n"
         if args.output:
-            path = Path(args.output)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8")
+            with prediction_stream(args.output) as stream:
+                stream.write(content)
         print(content, end="")
 
 

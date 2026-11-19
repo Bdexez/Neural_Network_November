@@ -102,6 +102,16 @@ class JointDataset(Dataset):
     def __len__(self):
         return len(self.offsets)
 
+    def references_image(self, path):
+        """Reconnaître aussi les liens physiques vers une image du jeu."""
+        if path is None:
+            return False
+        try:
+            identity = file_identity(Path(path).stat())[:2]
+        except FileNotFoundError:
+            return False
+        return any(identity == known[:2] for known in self._image_identities.values())
+
     def __getitem__(self, index):
         stat = self.path.stat()
         if (stat.st_size, stat.st_mtime_ns) != (self._stat.st_size, self._stat.st_mtime_ns):

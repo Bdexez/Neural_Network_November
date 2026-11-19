@@ -7,7 +7,7 @@ from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
 
 from .config import ChimeraConfig
-from .losses import symmetric_contrastive_loss
+from .losses import quantile_pinball_loss, symmetric_contrastive_loss
 from .forecast_adapter import ForecastAdapter, ForecastAdapterContext
 from .modules import (
     DecoderBlock, LayerCache, LatentResampler, QuantileForecastHead,
@@ -279,14 +279,7 @@ class Chimera(nn.Module):
             losses["classification"] = masked_cross_entropy(class_logits, class_labels)
             total = total + c.classification_weight * losses["classification"]
         if forecast_targets is not None:
-            observed = torch.isfinite(forecast_targets)
-            safe_target = torch.where(observed, forecast_targets, 0.0)
-            residual = safe_target.unsqueeze(-1) - forecast
-            q = forecast.new_tensor(c.quantiles)
-            pinball = torch.maximum(q * residual, (q - 1) * residual)
-            losses["forecast"] = (pinball * observed.unsqueeze(-1)).sum() / (
-                observed.sum().clamp_min(1) * len(c.quantiles)
-            )
+            losses["forecast"] = quantile_pinball_loss(forecast, forecast_targets, c.quantiles)
             total = total + c.forecast_weight * losses["forecast"]
         # Alignement contrastif de toutes les paires disponibles, jamais fictif avec B=1.
         if len(align_vectors) > 1 and batch > 1:

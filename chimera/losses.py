@@ -4,6 +4,18 @@ import torch
 from torch.nn import functional as F
 
 
+def quantile_pinball_loss(forecast, targets, quantiles):
+    """Perte moyenne des quantiles sur les cibles finies, accumulée au moins en FP32."""
+    dtype = torch.promote_types(torch.float32, torch.promote_types(forecast.dtype, targets.dtype))
+    prediction = forecast.to(dtype=dtype)
+    observed = torch.isfinite(targets)
+    target = torch.where(observed, targets, 0).to(dtype=dtype)
+    residual = target.unsqueeze(-1) - prediction
+    q = prediction.new_tensor(quantiles)
+    pinball = torch.maximum(q * residual, (q - 1) * residual)
+    return (pinball * observed.unsqueeze(-1)).sum() / (observed.sum().clamp_min(1) * len(quantiles))
+
+
 def symmetric_contrastive_loss(similarity, class_labels=None):
     """InfoNCE symétrique ; les classes connues peuvent partager leurs positifs.
 

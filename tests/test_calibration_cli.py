@@ -35,7 +35,12 @@ class CalibrationCliTests(unittest.TestCase):
                 joint = data["measurements"][condition]["joint"]
                 self.assertEqual(joint["calibration"]["scope"], "joint")
                 self.assertEqual(joint["evaluation"]["forecast_complete_examples"], 4)
+                scaled = data["measurements"][condition]["joint_width"]
+                self.assertEqual(scaled["calibration"]["score_scale"], "width")
+                self.assertEqual(scaled["evaluation"]["forecast_complete_examples"], 4)
             for options in (("--test-seed", "4100001", "--output", str(report)),
+                            ("--feature-scales", "0", "--output", str(report)),
+                            ("--feature-scales", "1", "2", "--output", str(report)),
                             ("--output", str(checkpoint))):
                 result = subprocess.run([*common, *options], text=True, capture_output=True, timeout=60)
                 self.assertNotEqual(result.returncode, 0)
@@ -85,6 +90,28 @@ class CalibrationCliTests(unittest.TestCase):
                   "--calibration", str(joint_path), "--output", str(predictions)])
             self.assertTrue(all(json.loads(line)["calibrated_coverage_scope"] == "joint"
                                 for line in predictions.read_text().splitlines()))
+            scaled_path = root / "joint-scaled.json"
+            main(["calibrate", "--checkpoint", str(checkpoint), "--data", str(calibration_data),
+                  "--scope", "joint", "--score-scale", "width", "--scale-floor", "0.001",
+                  "--output", str(scaled_path)])
+            scaled = ForecastCalibration.load(scaled_path)
+            self.assertEqual(scaled.score_scale, "width")
+            self.assertEqual(scaled.scale_floor, 0.001)
+            main(["evaluate", "--checkpoint", str(checkpoint), "--data", str(test_data),
+                  "--calibration", str(scaled_path), "--output", str(report_path)])
+            self.assertEqual(json.loads(report_path.read_text())["calibrated_score_scale"], "width")
+            self.assertEqual(json.loads(report_path.read_text())["calibrated_scale_floor"], 0.001)
+            main(["predict", "--checkpoint", str(checkpoint), "--data", str(test_data),
+                  "--calibration", str(scaled_path), "--output", str(predictions)])
+            self.assertTrue(all(json.loads(line)["calibrated_score_scale"] == "width"
+                                for line in predictions.read_text().splitlines()))
+            self.assertTrue(all(json.loads(line)["calibrated_scale_floor"] == 0.001
+                                for line in predictions.read_text().splitlines()))
+            prior = scaled_path.read_bytes()
+            with self.assertRaisesRegex(ValueError, "nécessite scope joint"):
+                main(["calibrate", "--checkpoint", str(checkpoint), "--data", str(calibration_data),
+                      "--score-scale", "width", "--output", str(scaled_path)])
+            self.assertEqual(scaled_path.read_bytes(), prior)
             main(["predict", *common, "--output", str(predictions)])
             rows = [json.loads(line) for line in predictions.read_text().splitlines()]
             self.assertEqual(len(rows), 7)

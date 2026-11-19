@@ -29,6 +29,8 @@ def main():
     parser.add_argument("--calibration-seed", type=int, default=4100000)
     parser.add_argument("--test-seed", type=int, default=5100000)
     parser.add_argument("--coverage", type=float, default=0.8)
+    parser.add_argument("--feature-scales", nargs="+", type=float,
+                        help="Gains positifs par variable pour historique et futur")
     parser.add_argument("--threads", type=int, default=2)
     args = parser.parse_args()
     if min(args.batch_size, args.calibration_batches, args.test_batches, args.threads) < 1:
@@ -45,19 +47,31 @@ def main():
         parser.error("La sortie doit être distincte du checkpoint")
     torch.set_num_threads(args.threads)
     model, payload = load_checkpoint(args.checkpoint)
+    if args.feature_scales is not None and (len(args.feature_scales) != model.config.series_features
+                                            or not all(math.isfinite(x) and x > 0 for x in args.feature_scales)):
+        parser.error("feature-scales doit contenir un gain fini et positif par variable")
     checkpoint_sha = file_sha256(args.checkpoint)
     calibration_batches = [synthetic_batch(model.config, batch_size=args.batch_size,
                                            seed=args.calibration_seed + index)
                            for index in range(args.calibration_batches)]
     test_batches = [synthetic_batch(model.config, batch_size=args.batch_size, seed=args.test_seed + index)
                     for index in range(args.test_batches)]
+    if args.feature_scales is not None:
+        gains = torch.tensor(args.feature_scales, dtype=torch.float64)
+        for batch in (*calibration_batches, *test_batches):
+            batch["series"] = batch["series"] * gains
+            batch["forecast_targets"] = batch["forecast_targets"] * gains
+            if not torch.isfinite(batch["series"]).all() or not torch.isfinite(batch["forecast_targets"]).all():
+                parser.error("feature-scales produit des valeurs non finies")
     measurements = {}
     for label, names in (("series", ("series",)), ("all", ("text", "image", "series"))):
         calibration_data = [filter_modalities(batch, names) for batch in calibration_batches]
         test_data = [filter_modalities(batch, names) for batch in test_batches]
-        fitted = {scope: fit_calibration(model, calibration_data, coverage=args.coverage, scope=scope,
-                                         checkpoint_sha256=checkpoint_sha)
-                  for scope in ("marginal", "joint")}
+        fitted = {label: fit_calibration(model, calibration_data, coverage=args.coverage, scope=scope,
+                                         score_scale=scale, checkpoint_sha256=checkpoint_sha)
+                  for label, scope, scale in (("marginal", "marginal", "none"),
+                                              ("joint", "joint", "none"),
+                                              ("joint_width", "joint", "width"))}
         measurements[label] = dict(raw=evaluate(model, test_data),
                                    **{scope: dict(calibration=calibration.to_dict(),
                                                   evaluation=evaluate(model, test_data, calibration=calibration))

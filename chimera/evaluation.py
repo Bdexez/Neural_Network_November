@@ -24,6 +24,9 @@ def evaluate(model, batches, amp="none", *, calibration=None):
     absolute = squared = covered = width = 0.0
     horizon_error = torch.zeros(model.config.forecast_horizon, dtype=torch.float64)
     horizon_count = torch.zeros_like(horizon_error)
+    feature_count = torch.zeros(model.config.series_features, dtype=torch.float64)
+    feature_width = torch.zeros_like(feature_count)
+    calibrated_feature_width = torch.zeros_like(feature_count)
     interval_covered = torch.zeros_like(horizon_error)
     interval_width = torch.zeros_like(horizon_error)
     calibrated_covered = torch.zeros_like(horizon_error)
@@ -42,6 +45,10 @@ def evaluate(model, batches, amp="none", *, calibration=None):
     def by_horizon(values):
         return [total.item() / count.item() if count else None
                 for total, count in zip(values, horizon_count)]
+
+    def by_feature(values):
+        return [total.item() / count.item() if count else None
+                for total, count in zip(values, feature_count)]
 
     try:
         with torch.inference_mode():
@@ -85,6 +92,7 @@ def evaluate(model, batches, amp="none", *, calibration=None):
                     squared += error.square().sum().item()
                     horizon_error += error.abs().sum((0, 2)).cpu()
                     horizon_count += observed.sum((0, 2)).cpu()
+                    feature_count += observed.sum((0, 1)).cpu()
                     if len(model.config.quantiles) > 1:
                         lower, upper = output.forecast[..., 0].double(), output.forecast[..., -1].double()
                         complete = observed.flatten(1).all(-1)
@@ -95,6 +103,7 @@ def evaluate(model, batches, amp="none", *, calibration=None):
                         width += torch.where(observed, upper - lower, 0).double().sum().item()
                         interval_covered += ((target >= lower) & (target <= upper) & observed).sum((0, 2)).cpu()
                         interval_width += torch.where(observed, upper - lower, 0).double().sum((0, 2)).cpu()
+                        feature_width += torch.where(observed, upper - lower, 0).sum((0, 1)).cpu()
                         alpha = 1 - (model.config.quantiles[-1] - model.config.quantiles[0])
                         score = upper - lower + 2 / alpha * (
                             (lower - target).clamp_min(0) + (target - upper).clamp_min(0))
@@ -106,6 +115,7 @@ def evaluate(model, batches, amp="none", *, calibration=None):
                             calibrated_joint_covered += (inside.flatten(1).all(-1) & complete).sum().item()
                             calibrated_covered += ((target >= low) & (target <= high) & observed).sum((0, 2)).cpu()
                             calibrated_width += torch.where(observed, high - low, 0).double().sum((0, 2)).cpu()
+                            calibrated_feature_width += torch.where(observed, high - low, 0).sum((0, 1)).cpu()
                             if calibration.scope == "marginal":
                                 score = high - low + 2 / (1 - calibration.coverage) * (
                                     (low - target).clamp_min(0) + (target - high).clamp_min(0))
@@ -150,6 +160,7 @@ def evaluate(model, batches, amp="none", *, calibration=None):
                 result["forecast_interval_score"] = raw_score / forecast_count if forecast_count else None
                 result["forecast_interval_coverage_by_horizon"] = by_horizon(interval_covered)
                 result["forecast_interval_width_by_horizon"] = by_horizon(interval_width)
+                result["forecast_interval_width_by_feature"] = by_feature(feature_width)
                 if calibration is not None:
                     result["calibrated_interval_coverage"] = calibrated_covered.sum().item() / forecast_count if forecast_count else None
                     result["calibrated_interval_width"] = calibrated_width.sum().item() / forecast_count if forecast_count else None
@@ -157,10 +168,14 @@ def evaluate(model, batches, amp="none", *, calibration=None):
                         calibrated_score / forecast_count if forecast_count and calibration.scope == "marginal" else None)
                     result["calibrated_nominal_coverage"] = calibration.coverage
                     result["calibrated_coverage_scope"] = calibration.scope
+                    result["calibrated_score_scale"] = calibration.score_scale
+                    if calibration.score_scale == "width":
+                        result["calibrated_scale_floor"] = calibration.scale_floor
                     result["calibrated_joint_interval_coverage"] = (
                         calibrated_joint_covered / complete_forecasts if complete_forecasts else None)
                     result["calibrated_interval_coverage_by_horizon"] = by_horizon(calibrated_covered)
                     result["calibrated_interval_width_by_horizon"] = by_horizon(calibrated_width)
+                    result["calibrated_interval_width_by_feature"] = by_feature(calibrated_feature_width)
         return result
     finally:
         model.train(was_training)

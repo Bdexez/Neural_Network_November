@@ -67,6 +67,7 @@ class CalibrationTests(unittest.TestCase):
         batch = synthetic_batch(model.config, batch_size=7, seed=191)
         batch["forecast_targets"][1:3] = float("nan")
         batch["forecast_targets"][:, -1] = float("nan")
+        batch["forecast_targets"][:, :, 1] = float("nan")
         raw = evaluate(model, [batch])
         full = evaluate(model, [batch], calibration=fitted)
         split = evaluate(model, [{key: value[section] for key, value in batch.items()}
@@ -78,6 +79,11 @@ class CalibrationTests(unittest.TestCase):
             self.assertAlmostEqual(full[name], split[name], places=5, msg=name)
         self.assertIsNone(full["calibrated_interval_coverage_by_horizon"][-1])
         self.assertIsNone(full["forecast_interval_width_by_horizon"][-1])
+        self.assertIsNone(full["forecast_interval_width_by_feature"][1])
+        self.assertIsNone(full["calibrated_interval_width_by_feature"][1])
+        for index in (0, 2):
+            self.assertAlmostEqual(full["calibrated_interval_width_by_feature"][index],
+                                   split["calibrated_interval_width_by_feature"][index], places=5)
         self.assertEqual(full["forecast_complete_examples"], 0)
         self.assertIsNone(full["forecast_joint_interval_coverage"])
         self.assertIsNone(full["calibrated_joint_interval_coverage"])
@@ -194,12 +200,15 @@ class CalibrationTests(unittest.TestCase):
         model = Chimera(ChimeraConfig.preset("tiny")).train()
         batch = synthetic_batch(model.config, batch_size=12, seed=1231)
         batch["forecast_targets"][:2, 0, 0] = float("nan")
-        full = fit_calibration(model, [batch], scope="joint")
         chunks = [{key: value[section] for key, value in batch.items()}
                   for section in (slice(0, 4), slice(4, 12))]
-        split = fit_calibration(model, chunks, scope="joint")
-        self.assertEqual(full.counts[0, 0].item(), 10)
-        torch.testing.assert_close(full.correction, split.correction, rtol=2e-5, atol=2e-6)
+        for amp in ("none", "bf16"):
+            for scale in ("none", "width"):
+                with self.subTest(amp=amp, scale=scale):
+                    full = fit_calibration(model, [batch], scope="joint", score_scale=scale, amp=amp)
+                    split = fit_calibration(model, chunks, scope="joint", score_scale=scale, amp=amp)
+                    self.assertEqual(full.counts[0, 0].item(), 10)
+                    torch.testing.assert_close(full.correction, split.correction, rtol=2e-5, atol=2e-6)
         self.assertTrue(model.training)
 
     def test_joint_interval_coverage_uses_only_complete_examples(self):
@@ -226,6 +235,50 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(report["calibrated_joint_interval_coverage"], 1)
         self.assertEqual(report["calibrated_coverage_scope"], "joint")
         self.assertIsNone(report["calibrated_interval_score"])
+
+    def test_width_normalized_joint_calibration_respects_per_variable_units(self):
+        forecast = torch.tensor([-1., 0., 1.], dtype=torch.float64).expand(10, 2, 2, 3).clone()
+        target = (torch.arange(10, dtype=torch.float64) - 4.5)[:, None, None].expand(10, 2, 2).clone()
+        target[0, 0, 0] = float("nan")
+        gain = torch.tensor([0.1, 10.], dtype=torch.float64)
+        shift = torch.tensor([-7., 20.], dtype=torch.float64)
+        changed_forecast = forecast * gain[None, None, :, None] + shift[None, None, :, None]
+        changed_target = target * gain[None, None, :] + shift[None, None, :]
+        scores = conformity_scores(forecast, target, score_scale="width", scale_floor=1e-8)
+        changed_scores = conformity_scores(changed_forecast, changed_target, score_scale="width", scale_floor=1e-8)
+        torch.testing.assert_close(scores, changed_scores, rtol=1e-12, atol=1e-12, equal_nan=True)
+        base = ForecastCalibration.from_scores(scores, (0.1, 0.5, 0.9), ("series",),
+                                               scope="joint", score_scale="width", scale_floor=1e-8)
+        changed = ForecastCalibration.from_scores(changed_scores, (0.1, 0.5, 0.9), ("series",),
+                                                  scope="joint", score_scale="width", scale_floor=1e-8)
+        torch.testing.assert_close(base.correction, changed.correction, rtol=1e-12, atol=1e-12)
+        expected = base.interval(forecast) * gain[None, None, :, None] + shift[None, None, :, None]
+        torch.testing.assert_close(changed.interval(changed_forecast), expected, rtol=1e-12, atol=1e-12)
+        restored = ForecastCalibration.from_dict(json.loads(json.dumps(base.to_dict())))
+        self.assertEqual(restored.to_dict()["format_version"], 3)
+        self.assertEqual(restored.score_scale, "width")
+        self.assertEqual(restored.scale_floor, 1e-8)
+        torch.testing.assert_close(restored.interval(forecast), base.interval(forecast), rtol=0, atol=0)
+
+    def test_width_floor_handles_degenerate_intervals_and_invalid_metadata(self):
+        forecast = torch.zeros(10, 1, 1, 3)
+        target = torch.ones(10, 1, 1)
+        scores = conformity_scores(forecast, target, score_scale="width", scale_floor=1e-4)
+        fitted = ForecastCalibration.from_scores(scores, (0.1, 0.5, 0.9), ("series",), scope="joint",
+                                                 score_scale="width", scale_floor=1e-4)
+        interval = fitted.interval(forecast)
+        self.assertTrue(torch.isfinite(interval).all())
+        self.assertTrue((interval[..., 1] >= target).all())
+        for changes in (dict(scope="marginal", score_scale="width"), dict(scope="joint", score_scale="invalid"),
+                        dict(scope="joint", score_scale="width", scale_floor=0),
+                        dict(scope="joint", score_scale="width", scale_floor=float("nan")),
+                        dict(scope="joint", score_scale="none", scale_floor=0.1)):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                ForecastCalibration.from_scores(scores, (0.1, 0.5, 0.9), ("series",), **changes)
+        for corrupt in (dict(format_version=3, scope="joint", score_scale="width"),
+                        dict(format_version=2, scope="joint", score_scale="width")):
+            with self.assertRaisesRegex(ValueError, "Version et portée"):
+                ForecastCalibration.from_dict(corrupt)
 
     def test_negative_correction_shrinks_and_never_inverts_interval_or_changes_quantiles(self):
         fitted = ForecastCalibration((0.1, 0.5, 0.9), 0.8, [[-2.]], [[20]], ("series",))

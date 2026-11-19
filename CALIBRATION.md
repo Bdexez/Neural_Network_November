@@ -24,21 +24,55 @@ Choisir le checkpoint définitif, puis préparer un JSONL de calibration contena
   --calibration runs/forecast-calibration.json --output runs/calibrated-predictions.jsonl
 ```
 
-La couverture demandée vaut par défaut le quantile maximal moins le quantile minimal, soit 0.8 pour `(0.1, 0.5, 0.9)`. Les prédictions ajoutent `calibrated_interval`, de forme `[horizon, variables, 2]`, et `calibrated_nominal_coverage`. Le champ `forecast` garde les quantiles bruts.
+La couverture demandée vaut par défaut le quantile maximal moins le quantile minimal, soit 0.8 pour `(0.1, 0.5, 0.9)`. Les prédictions ajoutent `calibrated_interval`, de forme `[horizon, variables, 2]`, `calibrated_nominal_coverage` et `calibrated_coverage_scope`. Le champ `forecast` garde les quantiles bruts.
 
 Une calibration correspond à **un fichier de checkpoint, une combinaison de modalités et une précision AMP**. Exporter les poids avant de calibrer : les fichiers complet et d'inférence ont des empreintes différentes. Le chargement vérifie le SHA-256 du fichier entier. Si une image ou le texte est ajouté ou retiré, ajuster une calibration pour cette combinaison. Si `--amp bf16` est utilisé à l'ajustement, le conserver pour `evaluate` et `predict`. Ces incompatibilités produisent une erreur explicite.
 
-Les cibles non finies sont ignorées séparément par horizon et variable. Un effectif insuffisant pour le rang demandé produit une erreur, sans interpolation ni troncature du rang. L'ajustement conserve seulement les scores scalaires en mémoire, soit `O(exemples × horizons × variables)` ; il ne conserve pas les images ou les entrées du réseau. Le JSON est remplacé atomiquement après un ajustement réussi.
+En mode marginal, les cibles non finies sont ignorées séparément par horizon et variable. Un effectif insuffisant pour le rang demandé produit une erreur, sans interpolation ni troncature du rang. L'ajustement conserve seulement les scores scalaires en mémoire, soit `O(exemples × horizons × variables)` ; il ne conserve pas les images ou les entrées du réseau. Le JSON est remplacé atomiquement après un ajustement réussi.
 
 ## Méthode et portée
 
 Nous adaptons la [régression quantile conformalisée de Romano et al.](https://arxiv.org/html/1905.03222v1). Pour chaque horizon et variable, le score est `max(borne_basse - cible, cible - borne_haute)`. Avec `n` cibles observées et une couverture `c`, la correction est la valeur au rang `ceil((n + 1) × c)`, en comptant depuis 1. Elle est soustraite à la borne basse et ajoutée à la borne haute. Elle peut être négative et resserrer l'intervalle.
 
-Notre implémentation élargit cet ensemble si nécessaire pour inclure la médiane et garder des bornes ordonnées. Cette extension ne réduit pas sa couverture. Les quantiles internes du réseau ne sont pas recalibrés individuellement.
+Notre implémentation élargit cet ensemble si nécessaire pour inclure la médiane et garder des bornes ordonnées. Cette extension ne réduit pas sa couverture. Les bornes calculées en FP64 puis ramenées en FP32 sont arrondies vers l'extérieur lorsque nécessaire pour ne pas exclure une cible située sur la limite. Les quantiles internes du réseau ne sont pas recalibrés individuellement.
 
-La portée statistique est marginale par cible, sous échangeabilité entre exemples de calibration et futurs exemples. Elle ne garantit pas la couverture simultanée d'une trajectoire entière, ni une couverture conditionnelle de 80 % pour chaque entrée. Des fenêtres temporelles successives ou un changement de régime ne satisfont pas automatiquement ces hypothèses.
+Par défaut, `--scope marginal` conserve une portée marginale par cible, sous échangeabilité entre exemples de calibration et futurs exemples. Elle ne garantit pas la couverture simultanée d'une trajectoire entière, ni une couverture conditionnelle de 80 % pour chaque entrée. Des fenêtres temporelles successives ou un changement de régime ne satisfont pas automatiquement ces hypothèses.
+
+`--scope joint` propose une autre cible : couvrir simultanément tous les horizons et variables d'une trajectoire. Pour chaque exemple complet, le score est le maximum des scores CQR sur toutes ses coordonnées ; une correction commune est choisie au même rang conformel, puis appliquée à toutes les bornes. L'utilisation d'un score maximal pour une région couvrant une trajectoire est une approche de [prédiction conformelle multivariée](https://ojs.aaai.org/index.php/AAAI/article/download/30089/31918). Les coordonnées de grandes unités peuvent dominer ce score et rendre les autres intervalles larges.
+
+Seules les trajectoires dont toutes les cibles sont finies contribuent à cet ajustement ; l'effectif commun est enregistré dans `counts`. La garantie de couverture simultanée suppose notamment un modèle fixé avant calibration et l'échangeabilité des trajectoires complètes de calibration avec les trajectoires futures concernées. L'exclusion de cibles manquantes ne garantit pas ces hypothèses si leur présence dépend des valeurs ; aucune garantie n'est revendiquée pour une population différente ou une série temporelle non échangeable. Le fichier joint utilise le format version 2 ; les fichiers marginaux version 1 restent lisibles.
+
+```bash
+.venv/bin/python -m chimera calibrate --checkpoint runs/workstation-refined/model.pt \
+  --data data/calibration.jsonl --coverage 0.8 --scope joint --output runs/joint-calibration.json
+```
+
+L'évaluation ajoute `forecast_complete_examples`, `forecast_joint_interval_coverage` et `calibrated_joint_interval_coverage` : une trajectoire compte comme couverte si toutes ses coordonnées sont dans leurs intervalles. Les exemples incomplets sont exclus de ce seul diagnostic ; les métriques marginales continuent à utiliser toutes les cibles observées. Une absence de trajectoire complète donne une couverture jointe `null`. Pour `scope: "joint"`, la couverture nominale désigne la trajectoire entière ; le score marginal d'intervalle calibré vaut `null`, car cette cible ne définit pas un niveau nominal par coordonnée.
 
 L'évaluation affiche couverture et largeur, globalement et par horizon. Elle ajoute aussi le [score d'intervalle de Gneiting et Raftery](https://sites.stat.washington.edu/raftery/Research/PDF/Gneiting2007jasa.pdf), orienté vers les petites valeurs : `largeur + 2/(1-c) × erreurs hors intervalle`. C'est le score d'un intervalle central de niveau `c`, y compris lorsque les quantiles de départ sont asymétriques. Il pénalise à la fois les intervalles trop larges et les observations manquées. Comparer les scores à couverture nominale identique.
+
+## Comparaison simultanée sur données synthétiques
+
+Un essai fixe le checkpoint `tiny` du mode top-1 historique, seed d'entraînement 42 et 80 étapes. Il utilise 512 trajectoires complètes pour la calibration, seeds de lots 4100000 à 4100031, puis 512 autres pour le test, seeds 5100000 à 5100031. Chaque trajectoire comporte 12 horizons et trois variables ; la cible de couverture est 80 %. Les deux méthodes voient les mêmes prévisions et données de calibration.
+
+| Modalités | Méthode | Couverture par cible | Couverture de trajectoire | Largeur moyenne |
+| --- | --- | ---: | ---: | ---: |
+| Séries seules | Brute | 83,34 % | 16,21 % | 1,072 |
+| Séries seules | Marginale | 80,57 % | 26,76 % | 0,919 |
+| Séries seules | Jointe | 97,97 % | 79,10 % | 2,082 |
+| Trois modalités | Brute | 83,71 % | 22,66 % | 1,069 |
+| Trois modalités | Marginale | 80,90 % | 31,45 % | 1,023 |
+| Trois modalités | Jointe | 98,86 % | 81,45 % | 2,011 |
+
+Sur ces exemples, la calibration marginale donne une couverture par cible proche de 80 %, mais couvre beaucoup moins souvent les 36 coordonnées simultanément. La calibration jointe atteint une couverture empirique de trajectoire proche de la cible, au prix d'intervalles environ deux fois plus larges. Une mesure finie peut être inférieure ou supérieure au niveau demandé. Cet essai utilise un seul checkpoint et un générateur synthétique ; il ne valide pas une couverture sur séries réelles, dépendantes ou soumises à un changement de régime.
+
+Les mesures, corrections et empreinte du checkpoint sont dans [joint-calibration-study.json](artifacts/joint-calibration-study.json). Reproduction avec le checkpoint local :
+
+```bash
+.venv/bin/python tools/benchmark_joint_calibration.py \
+  --checkpoint runs/top1-routing-experts/normalized-42/latest.pt \
+  --output runs/nouvelle-calibration-jointe.json
+```
 
 ## Mesures indépendantes
 

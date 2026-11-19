@@ -10,6 +10,13 @@ def quantile_pinball_loss(forecast, targets, quantiles):
     prediction = forecast.to(dtype=dtype)
     observed = torch.isfinite(targets)
     target = torch.where(observed, targets, 0).to(dtype=dtype)
+    if dtype == torch.float32:
+        # Un résidu peut atteindre deux fois l'amplitude et chaque élément
+        # peut contribuer à la somme avant sa division par le nombre de cibles.
+        limit = torch.finfo(torch.float32).max / (4 * max(forecast.numel(), 1))
+        magnitude = torch.maximum(prediction.detach().abs().amax(), target.detach().abs().amax()).item()
+        if magnitude > limit:
+            prediction, target = prediction.double(), target.double()
     residual = target.unsqueeze(-1) - prediction
     q = prediction.new_tensor(quantiles)
     pinball = torch.maximum(q * residual, (q - 1) * residual)

@@ -52,6 +52,17 @@ class QuantileLossTests(unittest.TestCase):
         loss.backward()
         self.assertEqual(predictions.grad.count_nonzero().item(), 0)
 
+    def test_large_float32_values_do_not_overflow_residual_or_sum(self):
+        predictions = torch.full((20, 1, 1, 3), -3e38, dtype=torch.float32, requires_grad=True)
+        targets = torch.full((20, 1, 1), 3e38, dtype=torch.float32)
+        loss = quantile_pinball_loss(predictions, targets, (0.1, 0.5, 0.9))
+        expected = (targets.double().mean() - predictions.detach().double().mean()) / 2
+        self.assertEqual(loss.dtype, torch.float64)
+        torch.testing.assert_close(loss, expected, rtol=1e-12, atol=0)
+        loss.backward()
+        self.assertTrue(torch.isfinite(predictions.grad).all())
+        self.assertTrue((predictions.grad != 0).all())
+
 
 if __name__ == "__main__":
     unittest.main()

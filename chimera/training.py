@@ -23,6 +23,7 @@ from .modalities import MODALITIES, balanced_modalities, has_observed_targets, k
 from .observed_objective import observed_objective, target_counts
 from .routing_metrics import summarize_expert_usage
 from .evaluation import evaluate
+from .gradient_clipping import clip_grad_norm
 from .modules import RotaryEmbedding
 
 
@@ -155,8 +156,7 @@ def drop_modalities(batch, probability, *, prediction_steps=1):
 def step_optimizer(model, optimizer, scaler, grad_clip):
     """Laisser GradScaler ignorer un overflow, au lieu d'arrêter l'entraînement."""
     scaler.unscale_(optimizer)
-    norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip,
-                                         error_if_nonfinite=not scaler.is_enabled())
+    norm = clip_grad_norm(model.parameters(), grad_clip, allow_nonfinite=scaler.is_enabled())
     previous_scale = scaler.get_scale()
     scaler.step(optimizer)
     scaler.update()

@@ -71,7 +71,10 @@ def alignment_worker(rank, init_file, directory, scenario):
             loss = distributed_alignment_loss(vectors, labels, temperature, mode, group=dist.group.WORLD,
                                               text_view=text_view,
                                               cross_rank_views=scenario == 'mismatched_cross_rank_views' and rank == 1,
-                                              cross_class_views=scenario == 'mismatched_cross_class_views' and rank == 1)
+                                              cross_class_views=(scenario in ('mismatched_cross_class_views',
+                                                                              'mismatched_cross_class_views_paired')
+                                                                 and rank == 1)
+                                              or scenario == 'invalid_cross_class_views_paired')
         except ValueError as exc:
             torch.save(dict(error=str(exc)), Path(directory) / f'{rank}.pt')
             return
@@ -117,6 +120,13 @@ def model_worker(rank, init_file, directory, scenario, mode):
         seen = []
         for i, section in enumerate(sections):
             part = {key:value[section] for key,value in batch.items()}
+            if scenario in ('mismatched_cross_class_views_paired', 'invalid_cross_class_views_paired'):
+                try:
+                    wrapped(**part, alignment_cross_class_views=(rank == 1 or scenario.startswith('invalid')))
+                except ValueError as exc:
+                    torch.save(dict(error=str(exc)), Path(directory)/f'model{rank}.pt')
+                    return
+                raise AssertionError('La configuration devait être rejetée')
             if scenario in ('mixed','single_pair'):
                 for key in ('input_ids','attention_mask'):
                     part.pop(key)
@@ -184,10 +194,21 @@ class DistributedAlignmentTests(unittest.TestCase):
                     torch.testing.assert_close(result[rank]['right'] / 2, right.grad[section], rtol=1e-6, atol=1e-7)
 
     def test_ranks_reject_mismatched_configuration_before_shape_collectives(self):
-        for scenario in ('mismatched_mode','mismatched_dimension','mismatched_dtype','mismatched_temperature','mismatched_text_view','mismatched_cross_rank_views','mismatched_cross_class_views'):
+        for scenario in ('mismatched_mode','mismatched_dimension','mismatched_dtype','mismatched_temperature','mismatched_text_view','mismatched_cross_rank_views','mismatched_cross_class_views','mismatched_cross_class_views_paired'):
             with self.subTest(scenario=scenario):
                 for result in self.run_workers(scenario):
                     self.assertIn('différents selon les rangs',result['error'])
+
+    def test_invalid_class_mode_is_rejected_on_all_ranks(self):
+        for result in self.run_workers('invalid_cross_class_views_paired'):
+            self.assertIn('nécessite le mode class', result['error'])
+
+    def test_model_synchronizes_class_option_validation(self):
+        for scenario, message in (('mismatched_cross_class_views_paired', 'différents selon les rangs'),
+                                  ('invalid_cross_class_views_paired', 'nécessite le mode class')):
+            with self.subTest(scenario=scenario):
+                for result in self.model_results(scenario):
+                    self.assertIn(message, result['error'])
 
     def test_class_mode_keeps_unknown_labels_separate_across_ranks(self):
         left, right = LEFT.clone().requires_grad_(), RIGHT.clone().requires_grad_()

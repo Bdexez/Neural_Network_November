@@ -234,7 +234,9 @@ class Chimera(nn.Module):
             raise ValueError("alignment_cross_rank_views doit être booléen")
         if type(alignment_cross_class_views) is not bool:
             raise ValueError("alignment_cross_class_views doit être booléen")
-        if alignment_cross_class_views and self.config.alignment_mode != "class":
+        distributed_alignment = (self.config.alignment_scope == "global" and self.training and dist.is_available()
+                                 and dist.is_initialized() and dist.get_world_size() > 1)
+        if alignment_cross_class_views and self.config.alignment_mode != "class" and not distributed_alignment:
             raise ValueError("alignment_cross_class_views nécessite le mode class")
         if use_cache and (self.training or input_ids is None):
             raise ValueError("use_cache nécessite eval() et des tokens texte")
@@ -366,8 +368,6 @@ class Chimera(nn.Module):
             total = total + c.forecast_weight * losses["forecast"]
         # En entraînement distribué, toutes les paires effectivement présentes
         # peuvent partager leurs exemples négatifs entre rangs.
-        distributed_alignment = (c.alignment_scope == "global" and self.training and dist.is_available()
-                                 and dist.is_initialized() and dist.get_world_size() > 1)
         if (c.alignment_text_view == "isolated" and input_ids is not None
                 and (distributed_alignment or len(align_vectors) > 1 and batch > 1)):
             isolated_text = self._isolated_text_representation(input_ids, valid)

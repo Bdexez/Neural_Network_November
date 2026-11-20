@@ -94,8 +94,6 @@ def distributed_alignment_loss(vectors, class_labels, temperature, mode, *, grou
         raise ValueError("cross_rank_views doit être booléen")
     if type(cross_class_views) is not bool:
         raise ValueError("cross_class_views doit être booléen")
-    if cross_class_views and mode != "class":
-        raise ValueError("cross_class_views nécessite le mode class")
     if (mode not in ("paired", "class") or text_view not in ("joint", "isolated")
             or not math.isfinite(temperature) or temperature <= 0):
         raise ValueError("Mode, vue textuelle ou température d'alignement invalide")
@@ -114,6 +112,8 @@ def distributed_alignment_loss(vectors, class_labels, temperature, mode, *, grou
     rows = [value.tolist() for value in specifications]
     if any(row[1:] != rows[0][1:] for row in rows[1:]):
         raise ValueError("Dimensions, dtype ou paramètres d'alignement différents selon les rangs")
+    if cross_class_views and mode != "class":
+        raise ValueError("cross_class_views nécessite le mode class")
     max_batch = max(row[0] for row in rows)
     zeros = torch.zeros_like(sample)
     packed = torch.stack([vectors.get(index, zeros) for index in range(3)], dim=1)

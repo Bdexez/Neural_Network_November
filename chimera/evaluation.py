@@ -7,15 +7,21 @@ import math
 import torch
 
 from .routing_metrics import summarize_expert_usage
+from .probability_metrics import ProbabilityMetrics
+from .series_probability import log_probabilities
 
 
-def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=None):
+def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=None, series_probability=None):
     if amp not in ("none", "bf16", "fp16"):
         raise ValueError("amp doit être none, bf16 ou fp16")
     if calibration is not None:
         calibration.validate(model.config, amp=amp)
     if series_classifier is not None:
         series_classifier.validate(model.config, amp=amp)
+    if series_probability is not None:
+        if series_classifier is None:
+            raise ValueError("La calibration de probabilités nécessite une tête temporelle")
+        series_probability.validate(series_classifier, amp=amp)
     was_training = model.training
     model.eval()
     device = next(model.parameters()).device
@@ -25,6 +31,8 @@ def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=
     correct = class_count = forecast_count = 0
     series_class_correct = series_class_count = 0
     series_class_confusion = Counter() if series_classifier is not None else None
+    probability_raw = ProbabilityMetrics() if series_probability is not None else None
+    probability_calibrated = ProbabilityMetrics() if series_probability is not None else None
     complete_forecasts = raw_joint_covered = calibrated_joint_covered = 0
     absolute = squared = covered = width = 0.0
     horizon_error = torch.zeros(model.config.forecast_horizon, dtype=torch.float64)
@@ -117,6 +125,10 @@ def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=
                         distinct, frequencies = pairs.unique(return_counts=True)
                         for pair, frequency in zip(distinct.cpu().tolist(), frequencies.cpu().tolist()):
                             series_class_confusion[divmod(pair, model.config.num_classes)] += frequency
+                        if series_probability is not None and observed.any():
+                            probability_raw.update(log_probabilities(series_scores[observed]), labels[observed])
+                            probability_calibrated.update(series_probability.log_probabilities(series_scores[observed]),
+                                                          labels[observed])
                 if "forecast_targets" in batch:
                     target = batch["forecast_targets"]
                     observed = torch.isfinite(target)
@@ -213,6 +225,10 @@ def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=
             result["series_classifier_accuracy"] = series_class_correct / series_class_count if series_class_count else None
             result["series_classifier_confusion"] = [dict(actual=actual, predicted=predicted, count=count)
                                                       for (actual, predicted), count in sorted(series_class_confusion.items())]
+        if series_probability is not None:
+            result["series_classifier_probability_metrics"] = dict(
+                uncalibrated=probability_raw.result(), calibrated=probability_calibrated.result())
+            result["series_classifier_inverse_temperature"] = series_probability.inverse_temperature
         if "loss" in result:
             # Chaque tâche est d'abord agrégée selon son nombre de cibles ; les
             # termes auxiliaires conservent leur agrégation par lot existante.

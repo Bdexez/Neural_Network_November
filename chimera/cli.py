@@ -17,6 +17,7 @@ from .data import JointDataset, collate_records, synthetic_batch
 from .forecast_adapter import fit_forecast_adapter
 from .model import Chimera
 from .series_classifier import SeriesClassifier, fit_series_classifier
+from .series_probability import SeriesProbabilityCalibration, fit_series_probability
 from .split_audit import audit_splits
 from .temporal_splits import prepare_temporal_splits
 from .tokenizer import ByteTokenizer
@@ -178,6 +179,7 @@ def main(argv=None):
     predict.add_argument("--amp", choices=("none", "bf16", "fp16"), default="none")
     predict.add_argument("--calibration", help="Calibration JSON ajustée sur ce checkpoint et ces modalités")
     predict.add_argument("--series-classifier", help="Tête de classification temporelle ajustée séparément")
+    predict.add_argument("--series-probability", help="Calibration par température pour cette tête")
     export = commands.add_parser("export", help="Exporter les poids sans l'optimiseur pour l'inférence")
     export.add_argument("--checkpoint", required=True)
     export.add_argument("--output", required=True)
@@ -190,6 +192,15 @@ def main(argv=None):
     evaluation.add_argument("--output")
     evaluation.add_argument("--calibration", help="Mesurer aussi les intervalles calibrés")
     evaluation.add_argument("--series-classifier", help="Mesurer aussi la tête de classification temporelle")
+    evaluation.add_argument("--series-probability", help="Mesurer aussi ses probabilités calibrées")
+    prob_fit = commands.add_parser("calibrate-series-probability", help="Calibrer les scores d'une tête temporelle")
+    prob_fit.add_argument("--checkpoint", required=True)
+    prob_fit.add_argument("--series-classifier", required=True)
+    prob_fit.add_argument("--data", required=True, help="JSONL de calibration distinct avec class_label")
+    prob_fit.add_argument("--output", required=True)
+    prob_fit.add_argument("--batch-size", type=int, default=32)
+    prob_fit.add_argument("--device", default="cpu")
+    prob_fit.add_argument("--amp", choices=("none", "bf16", "fp16"), default="none")
     series_fit = commands.add_parser("refine-series-classifier", help="Ajuster une tête temporelle standardisée")
     series_fit.add_argument("--checkpoint", required=True)
     series_fit.add_argument("--data", required=True, help="JSONL de séries avec class_label")
@@ -312,18 +323,24 @@ def main(argv=None):
     elif args.command == "predict":
         if args.max_new_tokens < 0:
             parser.error("max-new-tokens doit être >= 0")
-        sources = (args.data, args.checkpoint, args.calibration, args.series_classifier)
+        if args.series_probability and not args.series_classifier:
+            parser.error("series-probability nécessite series-classifier")
+        sources = (args.data, args.checkpoint, args.calibration, args.series_classifier, args.series_probability)
         if args.output and any(same_file(args.output, path) for path in sources if path):
             parser.error("Le fichier de prédictions doit être distinct des fichiers d'entrée")
         model, _ = load_checkpoint(args.checkpoint, args.device)
         calibration = ForecastCalibration.load(args.calibration) if args.calibration else None
         series_classifier = SeriesClassifier.load(args.series_classifier) if args.series_classifier else None
+        series_probability = SeriesProbabilityCalibration.load(args.series_probability) if args.series_probability else None
         if calibration is not None:
             calibration.validate_checkpoint(args.checkpoint)
             calibration.validate(model.config, amp=args.amp)
         if series_classifier is not None:
             series_classifier.validate_checkpoint(args.checkpoint)
             series_classifier.validate(model.config, amp=args.amp)
+        if series_probability is not None:
+            series_probability.validate_files(args.checkpoint, args.series_classifier)
+            series_probability.validate(series_classifier, amp=args.amp)
         model.eval()
         dataset = JointDataset(args.data, model.config)
         if dataset.references_image(args.output):
@@ -349,6 +366,9 @@ def main(argv=None):
                     scores = series_classifier.scores(model, batch)[0]
                     row["series_classifier_class_id"] = scores.argmax().item()
                     row["series_classifier_scores"] = scores.tolist()
+                    if series_probability is not None:
+                        row["series_classifier_probabilities"] = series_probability.probabilities(scores.unsqueeze(0))[0].tolist()
+                        row["series_classifier_inverse_temperature"] = series_probability.inverse_temperature
                 if calibration is not None:
                     row["calibrated_interval"] = calibration.interval(output.forecast)[0].tolist()
                     row["calibrated_nominal_coverage"] = calibration.coverage
@@ -402,6 +422,28 @@ def main(argv=None):
             stream.write(json.dumps(classifier.to_dict(), indent=2, allow_nan=False) + "\n")
         print(json.dumps(dict(output=args.output, class_counts=classifier.class_counts,
                               checkpoint_sha256=classifier.checkpoint_sha256)))
+    elif args.command == "calibrate-series-probability":
+        if args.batch_size < 1:
+            parser.error("batch-size doit être > 0")
+        if any(same_file(args.output, source) for source in (args.data, args.checkpoint, args.series_classifier)):
+            parser.error("La sortie doit être distincte des fichiers d'entrée")
+        model, _ = load_checkpoint(args.checkpoint, args.device)
+        classifier = SeriesClassifier.load(args.series_classifier)
+        classifier.validate_checkpoint(args.checkpoint)
+        dataset = JointDataset(args.data, model.config)
+        if dataset.references_image(args.output):
+            parser.error("La sortie doit être distincte des images d'entrée")
+        loader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=collate_records,
+                            generator=torch.Generator().manual_seed(0))
+        probability = fit_series_probability(model, classifier, loader, amp=args.amp,
+                                             checkpoint_sha256=file_sha256(args.checkpoint),
+                                             classifier_sha256=file_sha256(args.series_classifier),
+                                             dataset_sha256=dataset.fingerprint)
+        probability.validate_files(args.checkpoint, args.series_classifier)
+        with prediction_stream(args.output) as stream:
+            stream.write(json.dumps(probability.to_dict(), indent=2, allow_nan=False) + "\n")
+        print(json.dumps(dict(output=args.output, examples=probability.examples,
+                              inverse_temperature=probability.inverse_temperature)))
     elif args.command == "refine-forecast":
         if args.batch_size < 1 or args.context < 1 or not math.isfinite(args.ridge) or args.ridge <= 0:
             parser.error("batch-size, context et ridge doivent être strictement positifs ; ridge doit être fini")
@@ -453,6 +495,10 @@ def main(argv=None):
             sources.append(args.calibration)
         if args.command == "evaluate" and args.series_classifier:
             sources.append(args.series_classifier)
+        if args.command == "evaluate" and args.series_probability:
+            if not args.series_classifier:
+                parser.error("series-probability nécessite series-classifier")
+            sources.append(args.series_probability)
         if args.output and any(same_file(args.output, path) for path in sources):
             parser.error("Le fichier de sortie doit être distinct des fichiers d'entrée")
         model, _ = load_checkpoint(args.checkpoint, args.device)
@@ -479,11 +525,15 @@ def main(argv=None):
             return
         calibration = ForecastCalibration.load(args.calibration) if args.calibration else None
         series_classifier = SeriesClassifier.load(args.series_classifier) if args.series_classifier else None
+        series_probability = SeriesProbabilityCalibration.load(args.series_probability) if args.series_probability else None
         if calibration is not None:
             calibration.validate_checkpoint(args.checkpoint)
         if series_classifier is not None:
             series_classifier.validate_checkpoint(args.checkpoint)
-        report = evaluate(model, loader, args.amp, calibration=calibration, series_classifier=series_classifier)
+        if series_probability is not None:
+            series_probability.validate_files(args.checkpoint, args.series_classifier)
+        report = evaluate(model, loader, args.amp, calibration=calibration, series_classifier=series_classifier,
+                          series_probability=series_probability)
         if calibration is not None:
             identical = (dataset.fingerprint == calibration.dataset_sha256
                          if calibration.dataset_sha256 is not None else None)
@@ -496,6 +546,9 @@ def main(argv=None):
         if series_classifier is not None:
             report["series_classifier_data_reused"] = (
                 True if dataset.fingerprint == series_classifier.dataset_sha256 else None)
+        if series_probability is not None:
+            report["series_probability_data_reused"] = (
+                True if dataset.fingerprint == series_probability.dataset_sha256 else None)
         content = json.dumps(report, indent=2, allow_nan=False) + "\n"
         if args.output:
             with prediction_stream(args.output) as stream:

@@ -251,6 +251,17 @@ def train(args, config):
     else:
         args.alignment_duplicate_positives = (args.mixed_modalities if requested_duplicates is None
                                                else requested_duplicates)
+    previous_cross_views = previous.get("alignment_cross_rank_views", False)
+    requested_cross_views = getattr(args, "alignment_cross_rank_views", None)
+    if args.resume:
+        if requested_cross_views is not None and requested_cross_views != previous_cross_views:
+            raise ValueError(f"Reprise : alignment_cross_rank_views diffère du checkpoint ({previous_cross_views!r})")
+        args.alignment_cross_rank_views = previous_cross_views
+    else:
+        args.alignment_cross_rank_views = (args.mixed_modalities and args.alignment_duplicate_positives
+                                           if requested_cross_views is None else requested_cross_views)
+    if args.alignment_cross_rank_views and not args.alignment_duplicate_positives:
+        raise ValueError("alignment_cross_rank_views nécessite alignment_duplicate_positives")
     augmentation_options = {}
     previous_augmentation = previous.get("series_augmentation", {})
     for name, default in SeriesAugmentation().to_dict().items():
@@ -279,6 +290,7 @@ def train(args, config):
     trainer = {key: getattr(args, key) for key in keys}
     trainer["mixed_modalities"] = args.mixed_modalities
     trainer["alignment_duplicate_positives"] = args.alignment_duplicate_positives
+    trainer["alignment_cross_rank_views"] = args.alignment_cross_rank_views
     trainer["initialization"] = previous.get("initialization", initialization)
     trainer["series_augmentation"] = augment_series.to_dict()
     trainer["series_affine_augmentation"] = augment_affine.to_dict()
@@ -433,6 +445,8 @@ def train(args, config):
                                                            & (series != original_series)).any(dim=(1, 2)).sum().item())
                 for name, value in statistics.items():
                     series_statistics[name] = series_statistics.get(name, 0) + value
+            if args.alignment_cross_rank_views:
+                batch["alignment_cross_rank_views"] = True
             return batch
 
         batches = (prepare_microbatch(micro) for micro in range(args.accumulation))

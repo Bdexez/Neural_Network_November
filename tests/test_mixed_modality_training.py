@@ -58,6 +58,7 @@ class MixedModalityTrainingTests(unittest.TestCase):
             right, right_payload = load_checkpoint(split / 'latest.pt')
             self.assertTrue(right_payload['trainer']['mixed_modalities'])
             self.assertTrue(right_payload['trainer']['alignment_duplicate_positives'])
+            self.assertTrue(right_payload['trainer']['alignment_cross_rank_views'])
             self.assertEqual(left_payload['trainer']['validation_state'], right_payload['trainer']['validation_state'])
             for name, value in left.state_dict().items():
                 torch.testing.assert_close(value, right.state_dict()[name], rtol=0, atol=0, msg=name)
@@ -67,6 +68,9 @@ class MixedModalityTrainingTests(unittest.TestCase):
                 main(common + ['--no-mixed-modalities', '--output', str(split), '--resume', str(split / 'latest.pt')])
             with self.assertRaisesRegex(ValueError, 'alignment_duplicate_positives'):
                 main(common + ['--no-alignment-duplicate-positives', '--output', str(split),
+                               '--resume', str(split / 'latest.pt')])
+            with self.assertRaisesRegex(ValueError, 'alignment_cross_rank_views'):
+                main(common + ['--no-alignment-cross-rank-views', '--output', str(split),
                                '--resume', str(split / 'latest.pt')])
 
     def test_training_supplies_ids_when_enabled(self):
@@ -111,6 +115,31 @@ class MixedModalityTrainingTests(unittest.TestCase):
             self.assertFalse(restored['trainer']['alignment_duplicate_positives'])
             for name, value in expected.state_dict().items():
                 torch.testing.assert_close(value, actual.state_dict()[name], rtol=0, atol=0, msg=name)
+
+    def test_legacy_resume_preserves_disabled_cross_rank_views(self):
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            root = Path(directory)
+            config, data = make_data(root)
+            continuous, legacy = root / 'continuous-cross', root / 'legacy-cross'
+            common = ['--threads', '2', 'train', '--config', str(config), '--data', str(data),
+                      '--steps', '3', '--batch-size', '2', '--modality-dropout', '0']
+            options = ['--mixed-modalities', '--no-alignment-cross-rank-views']
+            main(common + options + ['--output', str(continuous)])
+            main(common + options + ['--output', str(legacy), '--stop-after', '1'])
+            checkpoint = legacy / 'latest.pt'
+            payload = torch.load(checkpoint, weights_only=False)
+            del payload['trainer']['alignment_cross_rank_views']
+            torch.save(payload, checkpoint)
+            main(common + ['--output', str(legacy), '--resume', str(checkpoint)])
+            expected, _ = load_checkpoint(continuous / 'latest.pt')
+            actual, restored = load_checkpoint(checkpoint)
+            self.assertTrue(restored['trainer']['alignment_duplicate_positives'])
+            self.assertFalse(restored['trainer']['alignment_cross_rank_views'])
+            for name, value in expected.state_dict().items():
+                torch.testing.assert_close(value, actual.state_dict()[name], rtol=0, atol=0, msg=name)
+            with self.assertRaisesRegex(ValueError, 'nécessite alignment_duplicate_positives'):
+                main(common + ['--mixed-modalities', '--no-alignment-duplicate-positives',
+                               '--alignment-cross-rank-views', '--output', str(root / 'invalid')])
 
     @unittest.skipUnless(dist.is_available() and dist.is_gloo_available(), 'Gloo indisponible')
     def test_distributed_mixed_training_global_alignment(self):

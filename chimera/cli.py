@@ -17,6 +17,7 @@ from .data import JointDataset, collate_records, synthetic_batch
 from .forecast_adapter import fit_forecast_adapter
 from .embedding_search import search_embeddings
 from .model import Chimera
+from .modality_batch_sampler import OrderedModalityBatchSampler
 from .retrieval_evaluation import evaluate_retrieval
 from .series_classifier import SeriesClassifier, fit_series_classifier
 from .series_gate import SeriesGate, fit_series_gate
@@ -476,7 +477,7 @@ def main(argv=None):
             series_gate_guard.validate_files(args.checkpoint, args.series_classifier, args.series_gate)
             series_gate_guard.validate(series_gate, series_classifier, amp=args.amp)
         model.eval()
-        dataset = JointDataset(args.data, model.config)
+        dataset = JointDataset(args.data, model.config, allow_mixed=True)
         if dataset.references_image(args.output):
             parser.error("Le fichier de prédictions doit être distinct des images d'entrée")
         count = 0
@@ -552,10 +553,11 @@ def main(argv=None):
         checkpoint_sha = file_sha256(args.checkpoint)
         model, _ = load_checkpoint(args.checkpoint, args.device)
         model.eval()
-        dataset = JointDataset(args.data, model.config)
+        dataset = JointDataset(args.data, model.config, allow_mixed=True)
         if dataset.references_image(args.output):
             parser.error("Le fichier de vecteurs doit être distinct des images d'entrée")
-        loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False, collate_fn=collate_records,
+        sampler = OrderedModalityBatchSampler(dataset, args.batch_size)
+        loader = DataLoader(dataset, batch_sampler=sampler, collate_fn=collate_records,
                             generator=torch.Generator().manual_seed(0))
         autocast = nullcontext() if args.amp == "none" else torch.autocast(
             torch.device(args.device).type, dtype=torch.bfloat16 if args.amp == "bf16" else torch.float16)
@@ -578,7 +580,7 @@ def main(argv=None):
                     count += 1
             if file_sha256(args.checkpoint) != checkpoint_sha:
                 raise ValueError("Le checkpoint a changé pendant l'extraction")
-            verified = JointDataset(args.data, model.config)
+            verified = JointDataset(args.data, model.config, allow_mixed=True)
             if (verified.fingerprint, verified.image_fingerprint) != (dataset.fingerprint, dataset.image_fingerprint):
                 raise ValueError("Le jeu ou ses images ont changé pendant l'extraction")
         if args.output:
@@ -860,11 +862,16 @@ def main(argv=None):
         if args.output and any(same_file(args.output, path) for path in sources):
             parser.error("Le fichier de sortie doit être distinct des fichiers d'entrée")
         model, _ = load_checkpoint(args.checkpoint, args.device)
-        dataset = JointDataset(args.data, model.config)
+        dataset = JointDataset(args.data, model.config, allow_mixed=args.command == "evaluate")
         if dataset.references_image(args.output):
             parser.error("Le fichier de sortie doit être distinct des images d'entrée")
-        loader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=collate_records,
-                            generator=torch.Generator().manual_seed(0))
+        if args.command == "evaluate":
+            sampler = OrderedModalityBatchSampler(dataset, args.batch_size)
+            loader = DataLoader(dataset, batch_sampler=sampler, collate_fn=collate_records,
+                                generator=torch.Generator().manual_seed(0))
+        else:
+            loader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=collate_records,
+                                generator=torch.Generator().manual_seed(0))
         if args.command == "calibrate":
             calibration = fit_calibration(model, loader, coverage=args.coverage, amp=args.amp, scope=args.scope,
                                           score_scale=args.score_scale, scale_floor=args.scale_floor,

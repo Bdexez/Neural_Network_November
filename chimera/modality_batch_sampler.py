@@ -49,3 +49,29 @@ class ModalityBatchSampler(Sampler):
         if missing:
             batches.extend(batches[index % self.global_batches] for index in range(missing))
         yield from batches[self.rank::self.num_replicas]
+
+
+class OrderedModalityBatchSampler(Sampler):
+    """Regrouper uniquement les lignes consécutives, sans réordonner les résultats."""
+
+    def __init__(self, dataset, batch_size):
+        if type(batch_size) is not int or batch_size < 1:
+            raise ValueError('Taille de lot invalide')
+        if dataset.signatures is None or len(dataset.signatures) != len(dataset):
+            raise ValueError('Le jeu doit être ouvert avec allow_mixed=True')
+        self.signatures, self.batch_size = dataset.signatures, batch_size
+        self.count = sum(1 for _ in self._batches())
+
+    def _batches(self):
+        start = 0
+        for index in range(1, len(self.signatures) + 1):
+            if (index == len(self.signatures) or index - start == self.batch_size
+                    or self.signatures[index] != self.signatures[start]):
+                yield range(start, index)
+                start = index
+
+    def __iter__(self):
+        return self._batches()
+
+    def __len__(self):
+        return self.count

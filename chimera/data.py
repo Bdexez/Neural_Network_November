@@ -34,11 +34,12 @@ def file_identity(stat):
 class JointDataset(Dataset):
     """JSONL local : texte, image, historique et cibles, sans téléchargement implicite."""
 
-    def __init__(self, path, config):
+    def __init__(self, path, config, *, allow_mixed=False):
         self.path = Path(path).resolve()
         self.config = config
         initial_identity = file_identity(self.path.stat())
         self.offsets, self.line_numbers = array("Q"), array("Q")
+        self.signatures = array("B") if allow_mixed else None
         signature = None
         digest = hashlib.sha256()
         image_lines = {}
@@ -65,9 +66,11 @@ class JointDataset(Dataset):
                                 for key in ("text", "image", "series"))
                 if not any(current):
                     raise ValueError(f"{self.path}:{line_number}: fournir text, image/image_path ou series")
-                if signature is not None and current != signature:
+                if not allow_mixed and signature is not None and current != signature:
                     raise ValueError(f"{self.path}:{line_number}: les modalités doivent être identiques dans le fichier")
                 signature = current
+                if self.signatures is not None:
+                    self.signatures.append(sum(int(present) << index for index, present in enumerate(current)))
                 if "image_path" in record and "image" not in record:
                     image_path = record["image_path"]
                     if not isinstance(image_path, str) or not image_path:

@@ -120,3 +120,19 @@ Le gain moyen apparié de recherche est de 4,30 points, avec un écart-type de 1
 ```
 
 Le dossier de sortie doit être nouveau. L'outil vérifie que les plages de seeds d'entraînement, de validation et de test de cet essai sont disjointes et conserve les logs et checkpoints locaux de chaque branche.
+
+## Vue textuelle isolée pour l'alignement
+
+Par défaut, la représentation textuelle utilisée par la perte d'alignement est le dernier état du décodeur **après** attention croisée vers les latents multimodaux. Elle peut donc dépendre de l'image et de la série qu'elle est censée comparer : elle n'est pas une représentation du texte seul. Les approches contrastives à encodeurs séparés, comme [CLIP](https://proceedings.mlr.press/v139/radford21a.html), illustrent l'intérêt de vues calculées indépendamment.
+
+L'option `alignment_text_view: "isolated"` calcule une seconde vue du texte avec les mêmes embeddings, le même décodeur et un contexte nul appris, sans lui fournir l'image ni la série de l'exemple. Cette vue sert uniquement à la perte d'alignement ; les logits de texte, les classes et les prévisions sont calculés par le passage multimodal habituel. À poids fixés, changer l'image ou la série ne change donc pas la vue textuelle isolée. Les gradients de cette vue mettent à jour les paramètres partagés, si bien que les prédictions peuvent évoluer après entraînement.
+
+```bash
+.venv/bin/python -m chimera train --init-from model.pt \
+  --model-overrides configs/isolated-text-alignment-overrides.json \
+  --steps 100 --output runs/isolated-text-alignment
+```
+
+Le défaut reste `"joint"`, compatible avec les anciens checkpoints ; aucun poids n'est ajouté. L'option fonctionne avec `alignment_mode` et `alignment_scope`, y compris le mode distribué. Dans ce dernier, tous les rangs doivent choisir la même vue : les paramètres sont vérifiés avant le rassemblement des représentations. Sans paire locale possible, le second passage est évité ; en mode global, un rang ayant du texte l'effectue même avec un seul exemple local, car d'autres rangs peuvent fournir les paires.
+
+Cette vue réutilise le resampler et les blocs du décodeur : elle ajoute donc du calcul et des activations lorsque la perte d'alignement est calculée, y compris pour les diagnostics à poids nul, et consomme des tirages de dropout supplémentaires à l'entraînement. Les métriques et pénalités de routage existantes ne comptent que le passage principal ; elles ne décrivent pas le routage de cette seconde vue. Le checkpointing des activations et la reprise restent pris en charge. Elle ne transforme pas le décodeur en encodeur bidirectionnel et ne garantit pas une meilleure recherche sur des données réelles.

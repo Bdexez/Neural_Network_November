@@ -84,7 +84,7 @@ Chaque bloc du décodeur combine :
 
 Une [normalisation RMS stable optionnelle](NUMERICAL_PRECISION.md) évite le débordement des carrés sur les grandes activations finies ; le chemin historique reste le défaut.
 
-L'[alignement contrastif peut utiliser les exemples des autres rangs](LEARNING.md#alignement-distribué-entre-rangs) pendant l'entraînement DDP ; le calcul local reste le défaut.
+L'[alignement contrastif peut utiliser les exemples des autres rangs](LEARNING.md#alignement-distribué-entre-rangs) pendant l'entraînement DDP et une [vue textuelle isolée](LEARNING.md#vue-textuelle-isolée-pour-lalignement) ; les modes locaux et joints restent les défauts.
 
 Le modèle ajoute une prédiction auxiliaire de plusieurs tokens futurs, un alignement contrastif entre modalités, la normalisation temporelle réversible, une projection directe de l'historique vers les horizons futurs et une tête de prévision dont les quantiles ne peuvent pas se croiser. Le tokenizer par octets couvre tout Unicode sans téléchargement de vocabulaire ; il est moins compact qu'un tokenizer de sous-mots.
 

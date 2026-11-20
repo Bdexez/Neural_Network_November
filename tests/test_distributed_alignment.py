@@ -58,6 +58,7 @@ def alignment_worker(rank, init_file, directory, scenario):
         mode = 'class' if scenario in ('class','class_unknown') else 'paired'
         if scenario == 'mismatched_mode':
             mode = 'class' if rank == 1 else 'paired'
+        text_view = 'isolated' if scenario == 'mismatched_text_view' and rank == 1 else 'joint'
         if scenario == 'mismatched_dimension' and rank == 1:
             vectors = {key:value[:,:2] for key,value in vectors.items()}
         if scenario == 'mismatched_dtype' and rank == 1:
@@ -67,7 +68,8 @@ def alignment_worker(rank, init_file, directory, scenario):
         else:
             temperature = .3
         try:
-            loss = distributed_alignment_loss(vectors, labels, temperature, mode, group=dist.group.WORLD)
+            loss = distributed_alignment_loss(vectors, labels, temperature, mode, group=dist.group.WORLD,
+                                              text_view=text_view)
         except ValueError as exc:
             torch.save(dict(error=str(exc)), Path(directory) / f'{rank}.pt')
             return
@@ -78,8 +80,9 @@ def alignment_worker(rank, init_file, directory, scenario):
         dist.destroy_process_group()
 
 
-def model_config(mode='paired', scope='global'):
+def model_config(mode='paired', scope='global', view='joint', checkpointing=False):
     return replace(ChimeraConfig.preset('tiny'), alignment_mode=mode, alignment_scope=scope,
+                   alignment_text_view=view, gradient_checkpointing=checkpointing,
                    alignment_weight=1., balance_weight=0., router_z_weight=0., mtp_weight=0.,
                    text_weight=0., classification_weight=0., forecast_weight=0., dropout=0.)
 
@@ -97,7 +100,8 @@ def model_worker(rank, init_file, directory, scenario, mode):
     dist.init_process_group('gloo', init_method=f'file://{init_file}', rank=rank, world_size=2,
                             timeout=timedelta(seconds=45))
     try:
-        config = model_config(mode)
+        isolated = scenario in ('isolated','isolated_missing')
+        config = model_config(mode,view='isolated' if isolated else 'joint',checkpointing=isolated)
         torch.manual_seed(712)
         model = Chimera(config).train()
         wrapped = DistributedDataParallel(DistributedTrainingModel(model), find_unused_parameters=True)
@@ -118,6 +122,9 @@ def model_worker(rank, init_file, directory, scenario, mode):
                     part.pop('images')
             if scenario == 'unlabeled' and rank == 1:
                 part.pop('class_labels')
+            if scenario == 'isolated_missing' and rank == 1:
+                for key in ('input_ids','attention_mask','images'):
+                    part.pop(key)
             with wrapped.no_sync() if scenario == 'accumulate' and i == 0 else nullcontext():
                 if scenario == 'unlabeled':
                     counts = target_counts(part, config.prediction_steps)
@@ -175,7 +182,7 @@ class DistributedAlignmentTests(unittest.TestCase):
                     torch.testing.assert_close(result[rank]['right'] / 2, right.grad[section], rtol=1e-6, atol=1e-7)
 
     def test_ranks_reject_mismatched_configuration_before_shape_collectives(self):
-        for scenario in ('mismatched_mode','mismatched_dimension','mismatched_dtype','mismatched_temperature'):
+        for scenario in ('mismatched_mode','mismatched_dimension','mismatched_dtype','mismatched_temperature','mismatched_text_view'):
             with self.subTest(scenario=scenario):
                 for result in self.run_workers(scenario):
                     self.assertIn('différents selon les rangs',result['error'])
@@ -274,6 +281,34 @@ class DistributedAlignmentTests(unittest.TestCase):
                 if grad is not None:
                     self.assertEqual(grad.count_nonzero().item(),0)
 
+    def test_ddp_isolated_text_with_shared_decoder_checkpointing(self):
+        config = model_config('class',scope='local',view='isolated',checkpointing=True)
+        torch.manual_seed(712)
+        reference = Chimera(config).train()
+        batch = model_batch(config)
+        expected = reference(**batch)
+        expected.loss.backward()
+        results = self.model_results('isolated',mode='class')
+        for result in results:
+            self.assertAlmostEqual(result['alignment'][0],expected.losses['alignment'].item(),places=5)
+            for name, actual in result['gradients'].items():
+                wanted = dict(reference.named_parameters())[name].grad
+                torch.testing.assert_close(actual,wanted,rtol=1e-3,atol=2e-6,msg=name)
+
+    def test_ddp_isolated_text_when_other_rank_has_only_series(self):
+        config = model_config(scope='local',view='isolated',checkpointing=True)
+        torch.manual_seed(712)
+        reference = Chimera(config).train()
+        batch = {key:value[:2] for key,value in model_batch(config).items()}
+        expected = reference(**batch)
+        expected.loss.backward()
+        results = self.model_results('isolated_missing')
+        for result in results:
+            self.assertAlmostEqual(result['alignment'][0],expected.losses['alignment'].item(),places=5)
+            for name, actual in result['gradients'].items():
+                wanted = dict(reference.named_parameters())[name].grad
+                torch.testing.assert_close(actual,wanted,rtol=1e-3,atol=2e-6,msg=name)
+
     def test_ddp_global_alignment_with_unlabeled_rank(self):
         config = model_config('class',scope='local')
         torch.manual_seed(712)
@@ -331,6 +366,34 @@ class DistributedAlignmentTests(unittest.TestCase):
                 torch.testing.assert_close(actual['model'][name],value,rtol=0,atol=0,msg=name)
             rows = [json.loads(row) for row in (full/'metrics.jsonl').read_text().splitlines()]
             self.assertTrue(all(row['alignment'] > 0 for row in rows))
+
+
+    def test_distributed_resume_with_isolated_text_and_checkpointing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root/'config.json'
+            replace(ChimeraConfig.preset('tiny'), alignment_scope='global', alignment_text_view='isolated',
+                    dropout=.1, gradient_checkpointing=True).save(config)
+            common = [sys.executable,'-m','torch.distributed.run','--standalone','--nproc-per-node=2',
+                      '-m','chimera','--threads','1','train','--config',str(config),'--steps','2',
+                      '--batch-size','1','--accumulation','2','--eval-every','2',
+                      '--modality-dropout','0','--seed','511','--loss-normalization','observed']
+            env = dict(os.environ,OMP_NUM_THREADS='1')
+            for key in ('RANK','LOCAL_RANK','WORLD_SIZE','MASTER_ADDR','MASTER_PORT'):
+                env.pop(key,None)
+            def run(*options):
+                result = subprocess.run([*common,*map(str,options)],env=env,text=True,
+                                        stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=90)
+                self.assertEqual(result.returncode,0,result.stdout[-6000:])
+            full, split = root/'full',root/'split'
+            run('--output',full)
+            run('--output',split,'--stop-after','1')
+            run('--output',split,'--resume',split/'latest.pt')
+            expected = torch.load(full/'latest.pt',weights_only=True)
+            actual = torch.load(split/'latest.pt',weights_only=True)
+            self.assertEqual(actual['config']['alignment_text_view'],'isolated')
+            for name,value in expected['model'].items():
+                torch.testing.assert_close(actual['model'][name],value,rtol=0,atol=0,msg=name)
 
 
 if __name__ == '__main__':

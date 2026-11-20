@@ -176,6 +176,23 @@ class Chimera(nn.Module):
                 raise ValueError("Positions incohérentes dans le cache")
         return batch
 
+    def _isolated_text_representation(self, input_ids, valid):
+        """Encoder le texte avec le contexte nul, sans image ni série associée."""
+        batch = input_ids.size(0)
+        memory = self.resampler([], [], batch)
+        x = self.embedding(input_ids)
+        for block in self.blocks:
+            if self.config.gradient_checkpointing and self.training:
+                def run(hidden, context, current=block):
+                    return current(hidden, valid, context)[0]
+                x = checkpoint(run, x, memory, use_reentrant=False)
+            else:
+                x = block(x, valid, memory)[0]
+        hidden = self.norm(x)
+        last = torch.arange(valid.size(1), device=x.device)[None, :].expand_as(valid)
+        last = last.masked_fill(~valid, -1).max(-1).values
+        return hidden[torch.arange(batch, device=x.device), last]
+
     def forward(
         self, input_ids=None, *, images=None, series=None, attention_mask=None,
         series_mask=None, labels=None, class_labels=None, forecast_targets=None,
@@ -310,13 +327,18 @@ class Chimera(nn.Module):
         # peuvent partager leurs exemples négatifs entre rangs.
         distributed_alignment = (c.alignment_scope == "global" and self.training and dist.is_available()
                                  and dist.is_initialized() and dist.get_world_size() > 1)
+        if (c.alignment_text_view == "isolated" and input_ids is not None
+                and (distributed_alignment or len(align_vectors) > 1 and batch > 1)):
+            isolated_text = self._isolated_text_representation(input_ids, valid)
+            align_vectors = [(index, isolated_text if index == 2 else vector) for index, vector in align_vectors]
         if distributed_alignment:
             if self._alignment_group is None or self._alignment_world is not dist.group.WORLD:
                 self._alignment_group = dist.new_group()
                 self._alignment_world = dist.group.WORLD
             vectors = {i: F.normalize(self.alignment[i](v).float(), dim=-1) for i, v in align_vectors}
             losses["alignment"] = distributed_alignment_loss(vectors, class_labels, c.alignment_temperature,
-                                                              c.alignment_mode, group=self._alignment_group)
+                                                              c.alignment_mode, group=self._alignment_group,
+                                                              text_view=c.alignment_text_view)
             total = total + c.alignment_weight * losses["alignment"]
         elif len(align_vectors) > 1 and batch > 1:
             vectors = [F.normalize(self.alignment[i](v).float(), dim=-1) for i, v in align_vectors]

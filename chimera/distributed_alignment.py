@@ -30,7 +30,7 @@ class _GatherWithGrad(torch.autograd.Function):
         return gradient[ctx.rank], None
 
 
-def distributed_alignment_loss(vectors, class_labels, temperature, mode, *, group):
+def distributed_alignment_loss(vectors, class_labels, temperature, mode, *, group, text_view="joint"):
     """Calculer les paires globales tout en conservant les gradients locaux.
 
     Les vecteurs, déjà normalisés, sont indexés par modalité (0, 1, 2).
@@ -48,14 +48,16 @@ def distributed_alignment_loss(vectors, class_labels, temperature, mode, *, grou
     if class_labels is not None and (class_labels.shape != (batch,) or class_labels.dtype != torch.long
                                      or class_labels.device != sample.device):
         raise ValueError("class_labels doit avoir la forme [B] et le même device")
-    if mode not in ("paired", "class") or not math.isfinite(temperature) or temperature <= 0:
-        raise ValueError("Mode ou température d'alignement invalide")
+    if (mode not in ("paired", "class") or text_view not in ("joint", "isolated")
+            or not math.isfinite(temperature) or temperature <= 0):
+        raise ValueError("Mode, vue textuelle ou température d'alignement invalide")
     dtype_codes = {torch.float16: 1, torch.bfloat16: 2, torch.float32: 3, torch.float64: 4}
     if sample.dtype not in dtype_codes:
         raise ValueError("Dtype de représentation non pris en charge")
     world = dist.get_world_size(group)
     temperature_bits = struct.unpack("!q", struct.pack("!d", float(temperature)))[0]
-    specification = torch.tensor([batch, dim, dtype_codes[sample.dtype], int(mode == "class"), temperature_bits],
+    specification = torch.tensor([batch, dim, dtype_codes[sample.dtype], int(mode == "class"),
+                                  int(text_view == "isolated"), temperature_bits],
                                  dtype=torch.long, device=sample.device)
     specifications = [torch.empty_like(specification) for _ in range(world)]
     dist.all_gather(specifications, specification, group=group)

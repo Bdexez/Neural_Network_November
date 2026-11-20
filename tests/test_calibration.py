@@ -8,7 +8,8 @@ import unittest
 import torch
 
 from chimera import Chimera, ChimeraConfig
-from chimera.calibration import ForecastCalibration, conformity_scores, file_sha256, fit_calibration
+from chimera.calibration import (ForecastCalibration, conformity_scores, file_sha256, fit_calibration,
+                                 tail_conformity_scores)
 from chimera.data import synthetic_batch
 from chimera.evaluation import evaluate
 
@@ -48,6 +49,80 @@ class CalibrationTests(unittest.TestCase):
         covered = ((targets[1000:] >= interval[..., 0]) & (targets[1000:] <= interval[..., 1])).float().mean()
         self.assertAlmostEqual(covered.item(), 0.8, delta=0.025)
         self.assertLess((interval[..., 1] - interval[..., 0]).mean().item(), 2)
+
+    def test_asymmetric_tail_ranks_and_versioned_roundtrip(self):
+        targets = torch.arange(40, dtype=torch.float64).reshape(-1, 1, 1)
+        targets[-1] = float("nan")
+        forecast = torch.tensor([-1., 0., 2.], dtype=torch.float64).expand(40, 1, 1, 3)
+        scores = tail_conformity_scores(forecast, targets)
+        fitted = ForecastCalibration.from_tail_scores(scores, (.1, .5, .9), ("series",),
+                                                       coverage=.8, lower_tail_fraction=.25)
+        self.assertEqual(fitted.counts.tolist(), [[39]])
+        self.assertEqual(fitted.correction.tolist(), [[-2.]])
+        self.assertEqual(fitted.upper_correction.tolist(), [[31.]])
+        self.assertEqual(fitted.interval(forecast[:1]).tolist(), [[[[0., 33.]]]])
+        data = fitted.to_dict()
+        self.assertEqual(data["format_version"], 4)
+        restored = ForecastCalibration.from_dict(json.loads(json.dumps(data)))
+        self.assertEqual(restored.lower_tail_fraction, .25)
+        torch.testing.assert_close(restored.interval(forecast[:4]), fitted.interval(forecast[:4]), rtol=0, atol=0)
+        for corrupted in (dict(data, format_version=1), dict(data, upper_correction=None),
+                          dict(data, lower_tail_fraction=0), dict(data, scope="invalid"),
+                          dict(data, upper_correction=[[float("inf")]])):
+            with self.subTest(corrupted=corrupted), self.assertRaises(ValueError):
+                ForecastCalibration.from_dict(corrupted)
+        mismatched = scores.clone()
+        mismatched[0, 0, 0, 1] = float("nan")
+        with self.assertRaisesRegex(ValueError, "mêmes cibles"):
+            ForecastCalibration.from_tail_scores(mismatched, (.1, .5, .9), ("series",))
+        with self.assertRaisesRegex(ValueError, "insuffisante"):
+            ForecastCalibration.from_tail_scores(scores[:8], (.1, .5, .9), ("series",))
+
+    def test_asymmetric_joint_scores_use_complete_trajectory_maxima(self):
+        targets = torch.arange(40, dtype=torch.float64)[:, None, None].expand(40, 2, 2).clone()
+        targets[:, 1, 1] += 3
+        targets[-1, 0, 0] = float("nan")
+        forecast = torch.tensor([-1., 0., 2.], dtype=torch.float64).expand(40, 2, 2, 3)
+        scores = tail_conformity_scores(forecast, targets, score_scale="width")
+        fitted = ForecastCalibration.from_tail_scores(scores, (.1, .5, .9), ("series",), scope="joint",
+                                                       score_scale="width", coverage=.8, lower_tail_fraction=.5)
+        complete = torch.isfinite(scores).flatten(1).all(-1)
+        maxima = scores[complete].flatten(1, 2).amax(1)
+        rank = 36  # ceil((39 + 1) * 0.9)
+        self.assertEqual(fitted.counts.tolist(), [[39, 39], [39, 39]])
+        self.assertAlmostEqual(fitted.correction[0, 0].item(), maxima[:, 0].kthvalue(rank).values.item())
+        self.assertAlmostEqual(fitted.upper_correction[0, 0].item(), maxima[:, 1].kthvalue(rank).values.item())
+        self.assertTrue((fitted.upper_correction == fitted.upper_correction[0, 0]).all())
+        restored = ForecastCalibration.from_dict(fitted.to_dict())
+        self.assertEqual(restored.scope, "joint")
+        self.assertEqual(restored.score_scale, "width")
+        torch.testing.assert_close(restored.interval(forecast[:2]), fitted.interval(forecast[:2]))
+
+    def test_asymmetric_calibration_balances_tails_on_independent_skewed_samples(self):
+        generator = torch.Generator().manual_seed(9234)
+        targets = -torch.log(torch.rand(14000, 1, 1, generator=generator).clamp_min(1e-8))
+        forecasts = torch.tensor([.5, 1., 1.5]).expand(14000, 1, 1, 3)
+        fitted = ForecastCalibration.from_tail_scores(tail_conformity_scores(forecasts[:2000], targets[:2000]),
+                                                       (.1, .5, .9), ("series",))
+        interval = fitted.interval(forecasts[2000:])
+        below = (targets[2000:] < interval[..., 0]).float().mean().item()
+        above = (targets[2000:] > interval[..., 1]).float().mean().item()
+        self.assertAlmostEqual(below, .1, delta=.025)
+        self.assertAlmostEqual(above, .1, delta=.025)
+        self.assertNotAlmostEqual(fitted.correction.item(), fitted.upper_correction.item(), places=2)
+
+    def test_asymmetric_joint_tail_events_on_independent_trajectories(self):
+        generator = torch.Generator().manual_seed(9235)
+        targets = -torch.log(torch.rand(12000, 3, 2, generator=generator).clamp_min(1e-8))
+        forecasts = torch.tensor([.5, 1., 1.5]).expand(12000, 3, 2, 3)
+        scores = tail_conformity_scores(forecasts[:2000], targets[:2000], score_scale="width")
+        fitted = ForecastCalibration.from_tail_scores(scores, (.1, .5, .9), ("series",), scope="joint",
+                                                       score_scale="width")
+        interval = fitted.interval(forecasts[2000:])
+        below = (targets[2000:] < interval[..., 0]).flatten(1).any(-1).float().mean().item()
+        above = (targets[2000:] > interval[..., 1]).flatten(1).any(-1).float().mean().item()
+        self.assertAlmostEqual(below, .1, delta=.025)
+        self.assertAlmostEqual(above, .1, delta=.025)
 
     def test_mixed_precision_calibration_cannot_be_reused_with_another_precision(self):
         model = Chimera(ChimeraConfig.preset("tiny")).train()
@@ -113,6 +188,13 @@ class CalibrationTests(unittest.TestCase):
         self.assertAlmostEqual(report["forecast_interval_score"], 26 / 3)
         self.assertAlmostEqual(report["calibrated_interval_score"], 4)
         self.assertEqual(report["calibrated_interval_coverage"], 1)
+        asymmetric = ForecastCalibration((0.1, 0.5, 0.9), 0.8, [[0.]], [[20]], ("series",),
+                                         upper_correction=[[0.]], lower_tail_fraction=.25)
+        report = evaluate(model, [dict(series=torch.ones(3, 1, 1),
+                                       forecast_targets=torch.tensor([-1., 1., 3.])[:, None, None])],
+                          calibration=asymmetric)
+        self.assertAlmostEqual(report["calibrated_interval_score"], 2 + (20 + 1 / .15) / 3)
+        self.assertEqual(report["calibrated_lower_tail_fraction"], .25)
 
     def test_per_variable_and_coordinate_coverage_exposes_hidden_undercoverage(self):
         class FixedForecast(torch.nn.Module):
@@ -298,11 +380,16 @@ class CalibrationTests(unittest.TestCase):
                   for section in (slice(0, 4), slice(4, 12))]
         for amp in ("none", "bf16"):
             for scale in ("none", "width"):
-                with self.subTest(amp=amp, scale=scale):
-                    full = fit_calibration(model, [batch], scope="joint", score_scale=scale, amp=amp)
-                    split = fit_calibration(model, chunks, scope="joint", score_scale=scale, amp=amp)
-                    self.assertEqual(full.counts[0, 0].item(), 10)
-                    torch.testing.assert_close(full.correction, split.correction, rtol=2e-5, atol=2e-6)
+                for fraction in (None, .5):
+                    with self.subTest(amp=amp, scale=scale, fraction=fraction):
+                        full = fit_calibration(model, [batch], scope="joint", score_scale=scale, amp=amp,
+                                               lower_tail_fraction=fraction)
+                        split = fit_calibration(model, chunks, scope="joint", score_scale=scale, amp=amp,
+                                                lower_tail_fraction=fraction)
+                        self.assertEqual(full.counts[0, 0].item(), 10)
+                        torch.testing.assert_close(full.correction, split.correction, rtol=2e-5, atol=2e-6)
+                        if fraction is not None:
+                            torch.testing.assert_close(full.upper_correction, split.upper_correction, rtol=2e-5, atol=2e-6)
         self.assertTrue(model.training)
 
     def test_joint_interval_coverage_uses_only_complete_examples(self):

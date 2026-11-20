@@ -160,8 +160,14 @@ def evaluate(model, batches, amp="none", *, calibration=None):
                             calibrated_width += torch.where(observed, high - low, 0).double().sum((0, 2)).cpu()
                             calibrated_feature_width += torch.where(observed, high - low, 0).sum((0, 1)).cpu()
                             if calibration.scope == "marginal":
-                                score = high - low + 2 / (1 - calibration.coverage) * (
-                                    (low - target).clamp_min(0) + (target - high).clamp_min(0))
+                                alpha = 1 - calibration.coverage
+                                if calibration.lower_tail_fraction in (None, 0.5):
+                                    score = high - low + 2 / alpha * (
+                                        (low - target).clamp_min(0) + (target - high).clamp_min(0))
+                                else:
+                                    fraction = calibration.lower_tail_fraction
+                                    score = (high - low + (low - target).clamp_min(0) / (alpha * fraction)
+                                             + (target - high).clamp_min(0) / (alpha * (1 - fraction)))
                                 calibrated_score += torch.where(observed, score, 0).double().sum().item()
                 if output.loss is not None:
                     accumulate("loss", output.loss.item(), n)
@@ -240,6 +246,8 @@ def evaluate(model, batches, amp="none", *, calibration=None):
                     result["calibrated_nominal_coverage"] = calibration.coverage
                     result["calibrated_coverage_scope"] = calibration.scope
                     result["calibrated_score_scale"] = calibration.score_scale
+                    if calibration.lower_tail_fraction is not None:
+                        result["calibrated_lower_tail_fraction"] = calibration.lower_tail_fraction
                     if calibration.score_scale == "width":
                         result["calibrated_scale_floor"] = calibration.scale_floor
                     result["calibrated_joint_interval_coverage"] = (

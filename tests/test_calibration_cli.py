@@ -18,6 +18,30 @@ from chimera.training import save_checkpoint
 
 
 class CalibrationCliTests(unittest.TestCase):
+    def test_tail_benchmark_keeps_data_and_noise_seeds_disjoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = replace(ChimeraConfig.preset("tiny"), forecast_horizon=2, series_features=1)
+            checkpoint, report = root / "model.pt", root / "report.json"
+            save_checkpoint(checkpoint, Chimera(config))
+            original = checkpoint.read_bytes()
+            common = [sys.executable, "tools/benchmark_tail_calibration.py", "--checkpoint", str(checkpoint),
+                      "--calibration-batches", "5", "--test-batches", "1", "--batch-size", "2"]
+            result = subprocess.run([*common, "--output", str(report)], capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            data = json.loads(report.read_text())
+            for modality in ("series", "all"):
+                entry = data["measurements"][modality]["separate_tails"]
+                self.assertEqual(entry["calibration"]["format_version"], 4)
+                self.assertEqual(entry["evaluation"]["calibrated_lower_tail_fraction"], .5)
+            for options in (("--test-seed", "33000001", "--output", str(report)),
+                            ("--test-noise-seed", "33000002", "--output", str(report)),
+                            ("--noise-scale", "0", "--output", str(report)),
+                            ("--output", str(checkpoint))):
+                result = subprocess.run([*common, *options], capture_output=True, text=True, timeout=60)
+                self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(checkpoint.read_bytes(), original)
+
     def test_joint_benchmark_rejects_overlapping_seeds_and_preserves_checkpoint(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -113,6 +137,21 @@ class CalibrationCliTests(unittest.TestCase):
             self.assertTrue(all(json.loads(line)["calibrated_score_scale"] == "width"
                                 for line in predictions.read_text().splitlines()))
             self.assertTrue(all(json.loads(line)["calibrated_scale_floor"] == 0.001
+                                for line in predictions.read_text().splitlines()))
+            tails_path = root / "joint-tails.json"
+            main(["calibrate", "--checkpoint", str(checkpoint), "--data", str(calibration_data),
+                  "--scope", "joint", "--score-scale", "width", "--lower-tail-fraction", "0.5",
+                  "--output", str(tails_path)])
+            tails = ForecastCalibration.load(tails_path)
+            self.assertEqual(tails.to_dict()["format_version"], 4)
+            self.assertEqual(tails.lower_tail_fraction, 0.5)
+            self.assertEqual(tails.scope, "joint")
+            main(["evaluate", "--checkpoint", str(checkpoint), "--data", str(test_data),
+                  "--calibration", str(tails_path), "--output", str(report_path)])
+            self.assertEqual(json.loads(report_path.read_text())["calibrated_lower_tail_fraction"], .5)
+            main(["predict", "--checkpoint", str(checkpoint), "--data", str(test_data),
+                  "--calibration", str(tails_path), "--output", str(predictions)])
+            self.assertTrue(all(json.loads(line)["calibrated_lower_tail_fraction"] == .5
                                 for line in predictions.read_text().splitlines()))
             prior = scaled_path.read_bytes()
             with self.assertRaisesRegex(ValueError, "nécessite scope joint"):

@@ -17,6 +17,7 @@ from .data import JointDataset, collate_records, synthetic_batch
 from .forecast_adapter import fit_forecast_adapter
 from .model import Chimera
 from .series_classifier import SeriesClassifier, fit_series_classifier
+from .series_gate import SeriesGate, fit_series_gate
 from .series_probability import SeriesProbabilityCalibration, fit_series_probability, log_probabilities
 from .series_set import SeriesPredictionSet, fit_series_set
 from .split_audit import audit_splits
@@ -202,6 +203,7 @@ def main(argv=None):
     predict.add_argument("--series-classifier", help="Tête de classification temporelle ajustée séparément")
     predict.add_argument("--series-probability", help="Calibration par température pour cette tête")
     predict.add_argument("--series-set", help="Ensemble conforme de classes")
+    predict.add_argument("--series-gate", help="Porte supervisée entre modèle et tête temporelle")
     export = commands.add_parser("export", help="Exporter les poids sans l'optimiseur pour l'inférence")
     export.add_argument("--checkpoint", required=True)
     export.add_argument("--output", required=True)
@@ -216,11 +218,14 @@ def main(argv=None):
     evaluation.add_argument("--series-classifier", help="Mesurer aussi la tête de classification temporelle")
     evaluation.add_argument("--series-probability", help="Mesurer aussi ses probabilités calibrées")
     evaluation.add_argument("--series-set", help="Mesurer les ensembles conformes de classes")
+    evaluation.add_argument("--series-gate", help="Mesurer la porte supervisée")
     evaluation.add_argument("--iid-intervals", action="store_true",
                             help="Intervalles de Wilson : suppose des exemples de test indépendants et identiquement distribués")
     evaluation.add_argument("--classifier-data", help="Jeu d'ajustement de la tête, à auditer")
     evaluation.add_argument("--probability-data", help="Jeu d'ajustement de la température, à auditer")
     evaluation.add_argument("--set-data", help="Jeu de calibration de l'ensemble conforme, à auditer")
+    evaluation.add_argument("--gate-data", help="Jeu d'ajustement de la porte, à auditer")
+    evaluation.add_argument("--gate-validation-data", help="Jeu de validation de la porte, à auditer")
     set_fit = commands.add_parser("calibrate-series-set", help="Calibrer les ensembles conformes de classes")
     set_fit.add_argument("--checkpoint", required=True)
     set_fit.add_argument("--series-classifier", required=True)
@@ -244,6 +249,22 @@ def main(argv=None):
     prob_fit.add_argument("--batch-size", type=int, default=32)
     prob_fit.add_argument("--device", default="cpu")
     prob_fit.add_argument("--amp", choices=("none", "bf16", "fp16"), default="none")
+    gate_fit = commands.add_parser("refine-series-gate", help="Apprendre à choisir entre deux classifieurs temporels")
+    gate_fit.add_argument("--checkpoint", required=True)
+    gate_fit.add_argument("--series-classifier", required=True)
+    gate_fit.add_argument("--data", required=True, help="JSONL étiqueté pour l'ajustement de la porte")
+    gate_fit.add_argument("--validation-data", required=True, help="JSONL étiqueté distinct pour sélectionner la porte")
+    gate_fit.add_argument("--classifier-data", help="Jeu d'ajustement de la tête, à auditer")
+    gate_fit.add_argument("--audit-series", action="store_true", help="Refuser les historiques communs aux jeux fournis")
+    gate_fit.add_argument("--output", required=True)
+    gate_fit.add_argument("--epochs", type=int, default=50)
+    gate_fit.add_argument("--batch-size", type=int, default=32)
+    gate_fit.add_argument("--fit-batch-size", type=int, default=128)
+    gate_fit.add_argument("--learning-rate", type=float, default=.001)
+    gate_fit.add_argument("--threshold", type=float, default=.03)
+    gate_fit.add_argument("--seed", type=int, default=0)
+    gate_fit.add_argument("--device", default="cpu")
+    gate_fit.add_argument("--amp", choices=("none", "bf16", "fp16"), default="none")
     series_fit = commands.add_parser("refine-series-classifier", help="Ajuster une tête temporelle standardisée")
     series_fit.add_argument("--checkpoint", required=True)
     series_fit.add_argument("--data", required=True, help="JSONL de séries avec class_label")
@@ -370,7 +391,10 @@ def main(argv=None):
             parser.error("series-probability nécessite series-classifier")
         if args.series_set and not args.series_classifier:
             parser.error("series-set nécessite series-classifier")
-        sources = (args.data, args.checkpoint, args.calibration, args.series_classifier, args.series_probability, args.series_set)
+        if args.series_gate and not args.series_classifier:
+            parser.error("series-gate nécessite series-classifier")
+        sources = (args.data, args.checkpoint, args.calibration, args.series_classifier, args.series_probability,
+                   args.series_set, args.series_gate)
         if args.output and any(same_file(args.output, path) for path in sources if path):
             parser.error("Le fichier de prédictions doit être distinct des fichiers d'entrée")
         model, _ = load_checkpoint(args.checkpoint, args.device)
@@ -390,6 +414,10 @@ def main(argv=None):
         if series_set is not None:
             series_set.validate_files(args.checkpoint, args.series_classifier, args.series_probability)
             series_set.validate(series_classifier, series_probability, amp=args.amp)
+        series_gate = SeriesGate.load(args.series_gate) if args.series_gate else None
+        if series_gate is not None:
+            series_gate.validate_files(args.checkpoint, args.series_classifier)
+            series_gate.validate(series_classifier, amp=args.amp)
         model.eval()
         dataset = JointDataset(args.data, model.config)
         if dataset.references_image(args.output):
@@ -415,6 +443,11 @@ def main(argv=None):
                     scores = series_classifier.scores(model, batch)[0]
                     row["series_classifier_class_id"] = scores.argmax().item()
                     row["series_classifier_scores"] = scores.tolist()
+                    if series_gate is not None:
+                        chosen, used, advantage = series_gate.choose(batch, output.classification_logits, scores.unsqueeze(0))
+                        row["series_gate_class_id"] = chosen[0].item()
+                        row["series_gate_selected"] = "series_classifier" if used[0].item() else "base"
+                        row["series_gate_advantage"] = advantage[0].item()
                     if series_probability is not None:
                         row["series_classifier_probabilities"] = series_probability.probabilities(scores.unsqueeze(0))[0].tolist()
                         row["series_classifier_inverse_temperature"] = series_probability.inverse_temperature
@@ -479,6 +512,39 @@ def main(argv=None):
             stream.write(json.dumps(classifier.to_dict(), indent=2, allow_nan=False) + "\n")
         print(json.dumps(dict(output=args.output, class_counts=classifier.class_counts,
                               checkpoint_sha256=classifier.checkpoint_sha256)))
+    elif args.command == "refine-series-gate":
+        if args.batch_size < 1:
+            parser.error("batch-size doit être > 0")
+        sources = (args.data, args.validation_data, args.checkpoint, args.series_classifier, args.classifier_data)
+        if any(same_file(args.output, path) for path in sources if path):
+            parser.error("La sortie doit être distincte des fichiers d'entrée")
+        model, _ = load_checkpoint(args.checkpoint, args.device)
+        classifier = SeriesClassifier.load(args.series_classifier)
+        classifier.validate_checkpoint(args.checkpoint)
+        dataset, validation = JointDataset(args.data, model.config), JointDataset(args.validation_data, model.config)
+        if dataset.references_image(args.output) or validation.references_image(args.output):
+            parser.error("La sortie doit être distincte des images d'entrée")
+        if args.audit_series or args.classifier_data:
+            references = {"validation": (args.validation_data, validation.fingerprint)}
+            if args.classifier_data:
+                references["tête"] = (args.classifier_data, classifier.dataset_sha256)
+            audit_series_calibration(args.data, dataset.fingerprint, references, output=args.output, subject="ajustement")
+        def loader(source):
+            return DataLoader(source, batch_size=args.batch_size, collate_fn=collate_records,
+                              generator=torch.Generator().manual_seed(0))
+        gate = fit_series_gate(model, classifier, loader(dataset), loader(validation),
+                               checkpoint_sha256=file_sha256(args.checkpoint),
+                               classifier_sha256=file_sha256(args.series_classifier),
+                               dataset_sha256=dataset.fingerprint, validation_sha256=validation.fingerprint,
+                               amp=args.amp, threshold=args.threshold, epochs=args.epochs,
+                               batch_size=args.fit_batch_size, learning_rate=args.learning_rate, seed=args.seed,
+                               feature_batch_size=args.batch_size)
+        gate.validate_files(args.checkpoint, args.series_classifier)
+        with prediction_stream(args.output) as stream:
+            stream.write(json.dumps(gate.to_dict(), indent=2, allow_nan=False) + "\n")
+        print(json.dumps(dict(output=args.output, train_examples=gate.train_examples,
+                              validation_examples=gate.validation_examples, validation_gain=gate.validation_gain,
+                              best_epoch=gate.best_epoch)))
     elif args.command == "calibrate-series-set":
         if args.batch_size < 1:
             parser.error("batch-size doit être > 0")
@@ -599,10 +665,16 @@ def main(argv=None):
             if not args.series_classifier:
                 parser.error("series-set nécessite series-classifier")
             sources.append(args.series_set)
+        if args.command == "evaluate" and args.series_gate:
+            if not args.series_classifier:
+                parser.error("series-gate nécessite series-classifier")
+            sources.append(args.series_gate)
         if args.command == "evaluate":
             for option, artifact, name in ((args.classifier_data, args.series_classifier, "classifier-data"),
                                            (args.probability_data, args.series_probability, "probability-data"),
-                                           (args.set_data, args.series_set, "set-data")):
+                                           (args.set_data, args.series_set, "set-data"),
+                                           (args.gate_data, args.series_gate, "gate-data"),
+                                           (args.gate_validation_data, args.series_gate, "gate-validation-data")):
                 if option and not artifact:
                     parser.error(f"{name} nécessite l'artefact correspondant")
                 if option:
@@ -643,6 +715,9 @@ def main(argv=None):
         series_set = SeriesPredictionSet.load(args.series_set) if args.series_set else None
         if series_set is not None:
             series_set.validate_files(args.checkpoint, args.series_classifier, args.series_probability)
+        series_gate = SeriesGate.load(args.series_gate) if args.series_gate else None
+        if series_gate is not None:
+            series_gate.validate_files(args.checkpoint, args.series_classifier)
         references = {}
         if args.classifier_data:
             references["tête"] = (args.classifier_data, series_classifier.dataset_sha256)
@@ -650,9 +725,14 @@ def main(argv=None):
             references["température"] = (args.probability_data, series_probability.dataset_sha256)
         if args.set_data:
             references["ensemble"] = (args.set_data, series_set.dataset_sha256)
+        if args.gate_data:
+            references["porte"] = (args.gate_data, series_gate.dataset_sha256)
+        if args.gate_validation_data:
+            references["validation porte"] = (args.gate_validation_data, series_gate.validation_sha256)
         audit_series_calibration(args.data, dataset.fingerprint, references, output=args.output, subject="test")
         report = evaluate(model, loader, args.amp, calibration=calibration, series_classifier=series_classifier,
-                          series_probability=series_probability, series_set=series_set, iid_intervals=args.iid_intervals)
+                          series_probability=series_probability, series_set=series_set, iid_intervals=args.iid_intervals,
+                          series_gate=series_gate)
         if references:
             report["series_audited_sources"] = list(references)
         if calibration is not None:
@@ -673,6 +753,9 @@ def main(argv=None):
         if series_set is not None:
             report["series_prediction_set_data_reused"] = (
                 True if dataset.fingerprint == series_set.dataset_sha256 else None)
+        if series_gate is not None:
+            report["series_gate_data_reused"] = (
+                True if dataset.fingerprint in (series_gate.dataset_sha256, series_gate.validation_sha256) else None)
         content = json.dumps(report, indent=2, allow_nan=False) + "\n"
         if args.output:
             with prediction_stream(args.output) as stream:

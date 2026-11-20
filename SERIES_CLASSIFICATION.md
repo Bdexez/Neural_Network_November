@@ -201,3 +201,25 @@ Les résultats par classe ne sont pas tous supérieurs à 90 % dans ce tirage : 
 .venv/bin/python tools/benchmark_series_sets.py --scope class \
   --checkpoint runs/joint-affine-pilot/control/latest.pt --output runs/series-class-set-study.json
 ```
+
+## Sélection supervisée entre classifieurs
+
+Une porte facultative choisit, pour chaque historique, la classe du modèle d'origine ou celle de la tête standardisée. Elle utilise les scores des deux classifieurs, la moyenne et l'écart type observés de chaque variable, ainsi que la longueur valide. Un petit réseau apprend à prédire la différence `(tête correcte) − (modèle correct)` ; il choisit la tête lorsque cette différence estimée dépasse le seuil demandé. Cette estimation n'est pas une probabilité. La porte s'inspire du principe des [mélanges d'experts adaptatifs](https://www.cs.toronto.edu/~hinton/absps/jjnh91.pdf), avec deux experts figés et une sélection discrète.
+
+Prévoir quatre jeux distincts : ajustement de la tête, ajustement de la porte, sélection de la porte, puis test final. Les jeux d'ajustement et de validation de la porte doivent représenter les conditions d'utilisation visées ; il est possible d'y inclure des transformations dont l'étiquette reste valide. La commande choisit l'époque maximisant le gain d'accuracy sur le jeu de validation. Si aucune époque ne dépasse le modèle de base sur cette validation, elle enregistre une porte qui choisit toujours le modèle de base. La sélection sur plusieurs époques peut elle-même surajuster la validation : mesurer ensuite le résultat sur un test indépendant.
+
+```bash
+.venv/bin/python -m chimera refine-series-gate \
+  --checkpoint model.pt --series-classifier head.json --data gate-train.jsonl \
+  --validation-data gate-validation.jsonl --classifier-data head-train.jsonl \
+  --audit-series --output gate.json
+.venv/bin/python -m chimera predict --checkpoint model.pt --series-classifier head.json \
+  --series-gate gate.json --data test.jsonl --output predictions.jsonl
+.venv/bin/python -m chimera evaluate --checkpoint model.pt --series-classifier head.json \
+  --series-gate gate.json --data test.jsonl --classifier-data head-train.jsonl \
+  --gate-data gate-train.jsonl --gate-validation-data gate-validation.jsonl --output report.json
+```
+
+L'artefact est lié aux SHA-256 du checkpoint et de la tête, ainsi qu'à la précision AMP. Il conserve les empreintes des jeux, les hyperparamètres, la seed, la taille des lots d'extraction, le device et la version de PyTorch ; la reproduction dépend aussi de l'environnement numérique. La commande refuse les jeux dont les octets sont identiques ; `--audit-series` compare aussi les historiques exacts entre ajustement et validation. `--classifier-data` ajoute le jeu de la tête à cet audit et vérifie son empreinte. Ces contrôles ne détectent pas tous les recouvrements temporels ni les transformations d'un même exemple.
+
+Les sorties d'origine restent présentes : `class_id` et `class_probabilities` décrivent toujours le modèle de base. `series_gate_class_id`, `series_gate_selected` et `series_gate_advantage` décrivent la décision supplémentaire ; l'évaluation donne son accuracy, son gain par rapport au modèle d'origine et la fréquence de sélection de la tête. Les éventuelles probabilités et ensembles conformes de la tête restent associés à **la tête**, et non à la décision de la porte. La porte ajoute un passage dans l'encodeur temporel pour la tête et une petite inférence MLP ; son ajustement conserve en mémoire les caractéristiques des exemples étiquetés. Un gain sur la validation ne garantit aucun gain sur une autre distribution.

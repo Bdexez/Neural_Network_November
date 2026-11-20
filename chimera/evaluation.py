@@ -12,7 +12,7 @@ from .probability_metrics import ProbabilityMetrics
 from .series_probability import log_probabilities
 
 
-def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=None, series_probability=None, series_set=None, iid_intervals=False):
+def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=None, series_probability=None, series_set=None, iid_intervals=False, series_gate=None):
     if amp not in ("none", "bf16", "fp16"):
         raise ValueError("amp doit être none, bf16 ou fp16")
     if calibration is not None:
@@ -27,6 +27,10 @@ def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=
         if series_classifier is None:
             raise ValueError("Les ensembles conformes nécessitent une tête temporelle")
         series_set.validate(series_classifier, series_probability, amp=amp)
+    if series_gate is not None:
+        if series_classifier is None:
+            raise ValueError("La porte nécessite une tête temporelle")
+        series_gate.validate(series_classifier, amp=amp)
     was_training = model.training
     model.eval()
     device = next(model.parameters()).device
@@ -38,6 +42,8 @@ def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=
     series_class_confusion = Counter() if series_classifier is not None else None
     probability_raw = ProbabilityMetrics() if series_probability is not None else None
     probability_calibrated = ProbabilityMetrics() if series_probability is not None else None
+    gate_examples = gate_selected = gate_labeled = gate_correct = 0
+    gate_selected_labeled = gate_selected_correct = 0
     set_examples = set_size = set_singletons = set_labeled = set_covered = 0
     set_labeled_singletons = set_correct_singletons = 0
     set_class_counts = torch.zeros(model.config.num_classes, dtype=torch.long)
@@ -105,6 +111,11 @@ def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=
                 with autocast():
                     output = model(**batch)
                     series_scores = series_classifier.scores(model, batch) if series_classifier is not None else None
+                gate_predictions = gate_choice = None
+                if series_gate is not None:
+                    gate_predictions, gate_choice, _ = series_gate.choose(batch, output.classification_logits, series_scores)
+                    gate_examples += gate_choice.numel()
+                    gate_selected += gate_choice.sum().item()
                 set_mask = None
                 if series_set is not None:
                     probs = (series_probability.probabilities(series_scores) if series_probability
@@ -135,6 +146,11 @@ def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=
                     weights["classification"] = observed.sum().item()
                     correct += ((output.classification_logits.argmax(-1) == labels) & observed).sum().item()
                     class_count += weights["classification"]
+                    if gate_predictions is not None:
+                        gate_labeled += observed.sum().item()
+                        gate_correct += ((gate_predictions == labels) & observed).sum().item()
+                        gate_selected_labeled += (gate_choice & observed).sum().item()
+                        gate_selected_correct += ((gate_predictions == labels) & gate_choice & observed).sum().item()
                     if set_mask is not None and observed.any():
                         selected = set_mask[observed]
                         observed_labels = labels[observed]
@@ -258,6 +274,15 @@ def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=
             result["series_classifier_probability_metrics"] = dict(
                 uncalibrated=probability_raw.result(), calibrated=probability_calibrated.result())
             result["series_classifier_inverse_temperature"] = series_probability.inverse_temperature
+        if series_gate is not None:
+            result.update(series_gate_examples=gate_examples,
+                          series_gate_labeled_examples=gate_labeled,
+                          series_gate_accuracy=gate_correct / gate_labeled if gate_labeled else None,
+                          series_gate_gain_vs_base=(gate_correct - correct) / gate_labeled if gate_labeled else None,
+                          series_gate_head_selection_rate=gate_selected / gate_examples if gate_examples else None,
+                          series_gate_head_selected_labeled=gate_selected_labeled,
+                          series_gate_head_selected_accuracy=(gate_selected_correct / gate_selected_labeled
+                                                              if gate_selected_labeled else None))
         if series_set is not None:
             result.update(series_prediction_set_method=series_set.method,
                           series_prediction_set_scope=series_set.scope,
@@ -277,6 +302,10 @@ def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=
                              accuracy=wilson_interval(correct, class_count))
             if series_classifier is not None:
                 intervals["series_classifier_accuracy"] = wilson_interval(series_class_correct, series_class_count)
+            if series_gate is not None:
+                intervals["series_gate_accuracy"] = wilson_interval(gate_correct, gate_labeled)
+                intervals["series_gate_head_selected_accuracy"] = wilson_interval(
+                    gate_selected_correct, gate_selected_labeled)
             if series_set is not None:
                 intervals["series_prediction_set_coverage"] = wilson_interval(set_covered, set_labeled)
                 intervals["series_prediction_set_coverage_by_class"] = [

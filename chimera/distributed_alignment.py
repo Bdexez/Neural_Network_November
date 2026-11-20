@@ -30,7 +30,7 @@ class _GatherWithGrad(torch.autograd.Function):
         return gradient[ctx.rank], None
 
 
-def distributed_alignment_loss(vectors, class_labels, temperature, mode, *, group, text_view="joint"):
+def distributed_alignment_loss(vectors, class_labels, temperature, mode, *, group, text_view="joint", sample_ids=None):
     """Calculer les paires globales tout en conservant les gradients locaux.
 
     Les vecteurs, déjà normalisés, sont indexés par modalité (0, 1, 2).
@@ -48,6 +48,9 @@ def distributed_alignment_loss(vectors, class_labels, temperature, mode, *, grou
     if class_labels is not None and (class_labels.shape != (batch,) or class_labels.dtype != torch.long
                                      or class_labels.device != sample.device):
         raise ValueError("class_labels doit avoir la forme [B] et le même device")
+    if sample_ids is not None and (sample_ids.shape != (batch,) or sample_ids.dtype != torch.long
+                                   or sample_ids.device != sample.device or (sample_ids < -1).any()):
+        raise ValueError("sample_ids doit être long [B], avec -1 pour les identités inconnues")
     if (mode not in ("paired", "class") or text_view not in ("joint", "isolated")
             or not math.isfinite(temperature) or temperature <= 0):
         raise ValueError("Mode, vue textuelle ou température d'alignement invalide")
@@ -74,10 +77,11 @@ def distributed_alignment_loss(vectors, class_labels, temperature, mode, *, grou
     if torch.is_grad_enabled() and not packed.requires_grad:
         packed = packed.detach().requires_grad_(True)
     gathered = _GatherWithGrad.apply(packed, group).reshape(world * max_batch, 3, dim)
-    metadata = torch.zeros(batch, 4, dtype=torch.long, device=sample.device)
+    metadata = torch.zeros(batch, 5, dtype=torch.long, device=sample.device)
     for index in vectors:
         metadata[:, index] = 1
     metadata[:, 3] = class_labels if class_labels is not None else -100
+    metadata[:, 4] = sample_ids if sample_ids is not None else -1
     if max_batch > batch:
         metadata = F.pad(metadata, (0, 0, 0, max_batch - batch))
     all_metadata = [torch.empty_like(metadata) for _ in range(world)]
@@ -93,7 +97,9 @@ def distributed_alignment_loss(vectors, class_labels, temperature, mode, *, grou
             with torch.autocast(device_type=sample.device.type, enabled=False):
                 similarity = left @ right.T / temperature
             labels = all_metadata[valid, 3] if mode == "class" else None
-            losses.append(symmetric_contrastive_loss(similarity, labels))
+            identities = all_metadata[valid, 4]
+            identities = identities if (identities >= 0).any() else None
+            losses.append(symmetric_contrastive_loss(similarity, labels, sample_ids=identities))
     # Lien explicite au gather même sans paire : tous les rangs participent
     # alors au backward de la collective avec un gradient nul.
     return torch.stack(losses).mean() + gathered.sum() * 0 if losses else gathered.sum() * 0

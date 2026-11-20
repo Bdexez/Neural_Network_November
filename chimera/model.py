@@ -225,7 +225,7 @@ class Chimera(nn.Module):
 
     def forward(
         self, input_ids=None, *, images=None, series=None, attention_mask=None,
-        series_mask=None, labels=None, class_labels=None, forecast_targets=None,
+        series_mask=None, labels=None, class_labels=None, forecast_targets=None, alignment_ids=None,
         cache: ModelCache | None = None, use_cache=False,
     ) -> ChimeraOutput:
         batch = self._validate(input_ids, images, series, attention_mask, series_mask, cache)
@@ -240,6 +240,10 @@ class Chimera(nn.Module):
             raise ValueError("labels doit partager la forme [B, T] de input_ids")
         if class_labels is not None and (class_labels.shape != (batch,) or class_labels.dtype != torch.long):
             raise ValueError("class_labels doit être long [B]")
+        if alignment_ids is not None and (alignment_ids.shape != (batch,) or alignment_ids.dtype != torch.long
+                                          or alignment_ids.device != self.embedding.weight.device
+                                          or (alignment_ids < -1).any()):
+            raise ValueError("alignment_ids doit être long [B], avec -1 pour les identités inconnues")
         if forecast_targets is not None and forecast_targets.shape != (
             batch, self.config.forecast_horizon, self.config.series_features
         ):
@@ -368,7 +372,7 @@ class Chimera(nn.Module):
             vectors = {i: F.normalize(self.alignment[i](v).float(), dim=-1) for i, v in align_vectors}
             losses["alignment"] = distributed_alignment_loss(vectors, class_labels, c.alignment_temperature,
                                                               c.alignment_mode, group=self._alignment_group,
-                                                              text_view=c.alignment_text_view)
+                                                              text_view=c.alignment_text_view, sample_ids=alignment_ids)
             total = total + c.alignment_weight * losses["alignment"]
         elif len(align_vectors) > 1 and batch > 1:
             vectors = [F.normalize(self.alignment[i](v).float(), dim=-1) for i, v in align_vectors]
@@ -378,7 +382,7 @@ class Chimera(nn.Module):
                     with torch.autocast(device_type=x.device.type, enabled=False):
                         similarity = vectors[i] @ vectors[j].T / c.alignment_temperature
                     contrastive.append(symmetric_contrastive_loss(
-                        similarity, class_labels if c.alignment_mode == "class" else None,
+                        similarity, class_labels if c.alignment_mode == "class" else None, sample_ids=alignment_ids,
                     ))
             losses["alignment"] = torch.stack(contrastive).mean()
             total = total + c.alignment_weight * losses["alignment"]

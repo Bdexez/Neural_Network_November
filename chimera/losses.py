@@ -40,20 +40,29 @@ def quantile_pinball_loss(forecast, targets, quantiles):
 
 
 
-def symmetric_contrastive_loss(similarity, class_labels=None):
+def symmetric_contrastive_loss(similarity, class_labels=None, *, sample_ids=None):
     """InfoNCE symétrique ; les classes connues peuvent partager leurs positifs.
 
     La diagonale reste positive, y compris pour les classes ignorées (-100).
+    Les identités connues répétées sont positives ; -1 indique une identité inconnue.
     L'extension utilise la moyenne des log-probabilités des positifs, comme
     l'objectif supervisé de https://arxiv.org/abs/2004.11362, entre deux modalités.
     """
     scores = similarity.float()
     identity = torch.arange(scores.size(0), device=scores.device)
-    if class_labels is None:
+    if sample_ids is not None:
+        if (sample_ids.shape != (scores.size(0),) or sample_ids.dtype != torch.long
+                or sample_ids.device != scores.device or (sample_ids < -1).any()):
+            raise ValueError("sample_ids doit être long [B], avec -1 pour les identités inconnues")
+    if class_labels is None and sample_ids is None:
         return (F.cross_entropy(scores, identity) + F.cross_entropy(scores.T, identity)) / 2
-    known = class_labels != -100
     positive = torch.eye(scores.size(0), device=scores.device, dtype=torch.bool)
-    positive |= (class_labels[:, None] == class_labels[None, :]) & known[:, None] & known[None, :]
+    if class_labels is not None:
+        known = class_labels != -100
+        positive |= (class_labels[:, None] == class_labels[None, :]) & known[:, None] & known[None, :]
+    if sample_ids is not None:
+        known = sample_ids >= 0
+        positive |= (sample_ids[:, None] == sample_ids[None, :]) & known[:, None] & known[None, :]
     weights = positive.float() / positive.sum(-1, keepdim=True)
     forward = -(weights * F.log_softmax(scores, dim=-1)).sum(-1).mean()
     backward = -(weights * F.log_softmax(scores.T, dim=-1)).sum(-1).mean()

@@ -15,6 +15,7 @@ from .calibration import ForecastCalibration, file_sha256, fit_calibration
 from .config import ChimeraConfig
 from .data import JointDataset, collate_records, synthetic_batch
 from .forecast_adapter import fit_forecast_adapter
+from .embedding_search import search_embeddings
 from .model import Chimera
 from .series_classifier import SeriesClassifier, fit_series_classifier
 from .series_gate import SeriesGate, fit_series_gate
@@ -213,6 +214,16 @@ def main(argv=None):
     embed.add_argument("--batch-size", type=int, default=4)
     embed.add_argument("--device", default="cpu")
     embed.add_argument("--amp", choices=("none", "bf16", "fp16"), default="none")
+    search = commands.add_parser("search-embeddings", help="Rechercher les voisins cosinus exacts de vecteurs")
+    search.add_argument("--queries", required=True)
+    search.add_argument("--candidates", required=True)
+    search.add_argument("--query-modality", choices=("text", "image", "series"), required=True)
+    search.add_argument("--candidate-modality", choices=("text", "image", "series"), required=True)
+    search.add_argument("--top-k", type=int, default=5)
+    search.add_argument("--query-batch-size", type=int, default=16)
+    search.add_argument("--candidate-batch-size", type=int, default=1024)
+    search.add_argument("--exclude-self", action="store_true")
+    search.add_argument("--output", help="Fichier JSONL des voisins ; sinon stdout")
     export = commands.add_parser("export", help="Exporter les poids sans l'optimiseur pour l'inférence")
     export.add_argument("--checkpoint", required=True)
     export.add_argument("--output", required=True)
@@ -558,6 +569,20 @@ def main(argv=None):
                 raise ValueError("Le jeu ou ses images ont changé pendant l'extraction")
         if args.output:
             print(f"{count} vecteurs écrits dans {args.output}")
+    elif args.command == "search-embeddings":
+        if min(args.top_k, args.query_batch_size, args.candidate_batch_size) < 1:
+            parser.error("top-k et les tailles de lot doivent être >= 1")
+        if args.output and any(same_file(args.output, path) for path in (args.queries, args.candidates)):
+            parser.error("Le fichier de résultats doit être distinct des fichiers de vecteurs")
+        count = 0
+        with prediction_stream(args.output) as stream:
+            for row in search_embeddings(args.queries, args.candidates, args.query_modality, args.candidate_modality,
+                                         top_k=args.top_k, query_batch_size=args.query_batch_size,
+                                         candidate_batch_size=args.candidate_batch_size, exclude_self=args.exclude_self):
+                stream.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n")
+                count += 1
+        if args.output:
+            print(f"{count} recherches écrites dans {args.output}")
     elif args.command == "export":
         if args.stable_rms_norm and same_file(args.output, args.checkpoint):
             parser.error("Le checkpoint stable doit être distinct du checkpoint source")

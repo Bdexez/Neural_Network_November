@@ -150,6 +150,12 @@ Les fichiers de [configuration](configs/) permettent de modifier dimensions, pro
   --data runs/data/validation.jsonl --batch-size 4 \
   --output runs/custom/embeddings.jsonl
 
+# Rechercher les séries les plus proches de chaque texte
+.venv/bin/python -m chimera search-embeddings \
+  --queries runs/custom/embeddings.jsonl --query-modality text \
+  --candidates runs/custom/embeddings.jsonl --candidate-modality series \
+  --top-k 5 --exclude-self --output runs/custom/neighbors.jsonl
+
 # Exporter les poids seuls pour réduire la taille et la mémoire de chargement
 .venv/bin/python -m chimera export --checkpoint runs/custom/best.pt \
   --output runs/custom/model.pt
@@ -226,6 +232,8 @@ Un fichier JSONL contient un objet par ligne. Les champs de modalités doivent �
 La commande `embed` écrit une ligne JSON par exemple, dans l'ordre du fichier, avec `index` et un dictionnaire `vectors` contenant `text`, `image` et/ou `series`. Chaque vecteur est la projection contrastive en FP32, normalisée lorsque sa norme n'est pas négligeable ; une projection nulle reste nulle. Le texte est toujours encodé avec un contexte isolé, même si le checkpoint indique `alignment_text_view: "joint"` : dans ce dernier cas, cette vue textuelle n'a pas été directement optimisée par l'alignement et sa qualité pour la recherche doit être vérifiée. L'image et la série sont également encodées indépendamment des autres modalités. Des vecteurs peuvent être comparés par produit scalaire lorsqu'ils sont non nuls, mais un modèle non entraîné ou un alignement insuffisant ne garantit aucune pertinence sémantique.
 
 Chaque ligne indique les empreintes SHA-256 du checkpoint et du JSONL, celle des images externes s'il y en a, ainsi que la vue textuelle d'entraînement, AMP, l'appareil, la taille des lots et la version de PyTorch. Comparer des vecteurs issus du même checkpoint et de la même précision AMP ; appareil et taille de lot peuvent introduire de petits écarts numériques. Le checkpoint et le jeu sont revérifiés à la fin, ce qui relit également les images externes. Une sortie fichier est remplacée seulement après succès ; sur stdout, des lignes peuvent déjà avoir été émises en cas d'erreur tardive. L'API `model.encode_modalities(...)` expose les mêmes vecteurs sans changer le mode train/eval ni désactiver les gradients.
+
+`search-embeddings` compare deux sorties `embed`, éventuellement issues de jeux distincts, par cosinus exact. Chaque ligne de résultat contient l'indice de la requête, les modalités et les empreintes des deux fichiers de vecteurs, puis `matches`, classés par cosinus décroissant et indice candidat croissant en cas d'égalité. `--exclude-self` exclut les lignes de même indice uniquement lorsque les empreintes du jeu et de ses images correspondent ; cela peut exclure une paire texte/série effectivement associée. Les fichiers doivent partager checkpoint et AMP ; les dimensions, métadonnées et valeurs sont vérifiées, et les vecteurs nuls sont refusés. Les calculs utilisent une normalisation FP64 et parcourent les candidats une fois par lot de requêtes : la mémoire dépend des tailles de lots, au prix de lectures répétées et d'un coût quadratique en nombre de comparaisons. La sortie fichier est atomique ; stdout peut contenir des résultats partiels en cas d'erreur tardive.
 
 Le lecteur indexe les positions des lignes et charge les exemples à la demande : il garde environ 16 octets d'index par exemple, au lieu de conserver tous les tableaux Python. Le fichier est parcouru une fois à l'ouverture pour valider les modalités et calculer son empreinte. Chaque image externe distincte est lue une fois pour calculer son empreinte, ce qui ajoute un coût d'ouverture et un index en mémoire proportionnel au nombre de chemins d'images distincts. Le lecteur vérifie aussi l'identité des fichiers d'image avant et après leur décodage. Les erreurs indiquent le fichier et la ligne. Les commandes `predict`, `embed`, `evaluate`, `calibrate` et `refine-forecast` refusent d'écrire sur une image du jeu, y compris via un lien physique ou symbolique. Les sorties de prédiction et d'évaluation remplacent leur fichier uniquement après une exécution réussie.
 

@@ -136,3 +136,25 @@ L'option `alignment_text_view: "isolated"` calcule une seconde vue du texte avec
 Le défaut reste `"joint"`, compatible avec les anciens checkpoints ; aucun poids n'est ajouté. L'option fonctionne avec `alignment_mode` et `alignment_scope`, y compris le mode distribué. Dans ce dernier, tous les rangs doivent choisir la même vue : les paramètres sont vérifiés avant le rassemblement des représentations. Sans paire locale possible, le second passage est évité ; en mode global, un rang ayant du texte l'effectue même avec un seul exemple local, car d'autres rangs peuvent fournir les paires.
 
 Cette vue réutilise le resampler et les blocs du décodeur : elle ajoute donc du calcul et des activations lorsque la perte d'alignement est calculée, y compris pour les diagnostics à poids nul, et consomme des tirages de dropout supplémentaires à l'entraînement. Les métriques et pénalités de routage existantes ne comptent que le passage principal ; elles ne décrivent pas le routage de cette seconde vue. Le checkpointing des activations et la reprise restent pris en charge. Elle ne transforme pas le décodeur en encodeur bidirectionnel et ne garantit pas une meilleure recherche sur des données réelles.
+
+### Comparaison synthétique des vues textuelles
+
+Les deux variantes affinent le même checkpoint `tiny` pendant 80 étapes sur deux processus CPU, avec un exemple par rang, trois seeds appariées, `alignment_scope: "global"`, `alignment_mode: "class"` et un poids d'alignement de 0,2. Les mêmes données synthétiques multimodales alimentent les deux variantes ; leur texte indique explicitement la classe. Le test utilise 512 autres exemples, avec des seeds distinctes de l'entraînement et de sa validation pour cet essai.
+
+Pour les deux variantes, la recherche ci-dessous encode **le texte seul** avec le contexte nul, puis cherche parmi les 32 séries de son lot une série de même classe. La MAE est mesurée sur la prévision médiane à partir de l'image et de la série, sans texte en entrée.
+
+| Seed | Recherche texte–série, vue jointe | Recherche texte–série, vue isolée | MAE, vue jointe | MAE, vue isolée |
+| ---: | ---: | ---: | ---: | ---: |
+| 111000000 | 81,05 % | 82,03 % | 0,18592 | 0,19708 |
+| 113000000 | 80,27 % | 96,88 % | 0,18114 | 0,19281 |
+| 115000000 | 79,88 % | 80,27 % | 0,18610 | 0,18437 |
+| Moyenne | 80,40 % | 86,39 % | 0,18439 | 0,19142 |
+
+L'écart moyen apparié de recherche est de 5,99 points, avec un écart-type de 9,19 points entre les trois différences ; la MAE moyenne augmente d'environ 3,8 %. Sur ce test, remplacer les images et séries associées change la représentation textuelle de la vue jointe d'une norme L2 moyenne de 0,95, contre zéro pour la vue isolée. Trois entraînements, un seul checkpoint et des données synthétiques faciles ne démontrent pas un gain général. La recherche de classe accepte une autre série de même classe et ne mesure pas l'identification unique d'un exemple. Les [mesures complètes](artifacts/isolated-text-alignment-study.json) comprennent les autres recherches, les seeds et les empreintes.
+
+```bash
+.venv/bin/python tools/compare_text_alignment_view.py \
+  --checkpoint runs/joint-affine-pilot/control/latest.pt --output-dir runs/isolated-text-study
+```
+
+Le dossier de sortie doit être nouveau ; l'outil vérifie les plages de seeds et conserve les logs et checkpoints locaux de chaque branche.

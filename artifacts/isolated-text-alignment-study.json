@@ -1,0 +1,158 @@
+{
+  "settings": {
+    "checkpoint": "/home/bdex/delivery/Neural_Network_November/runs/joint-affine-pilot/control/latest.pt",
+    "output_dir": "/tmp/chimera-text-study-committed-mCC2V2/study",
+    "seeds": [
+      111000000,
+      113000000,
+      115000000
+    ],
+    "steps": 80,
+    "test_seed": 120000000,
+    "test_batches": 16,
+    "test_batch_size": 32,
+    "train_threads": 1,
+    "eval_threads": 2,
+    "lr": 0.0003,
+    "alignment_weight": 0.2
+  },
+  "parent_sha256": "2d2b6619ddf019a83f2458343b8665d091e62d1513507b9f7f8c97533e45fe43",
+  "torch_version": "2.15.0+cpu",
+  "runs": [
+    {
+      "seed": 111000000,
+      "scope": "joint",
+      "checkpoint_sha256": "3e371fc09a1c9a4e769e5ccdb701d0ea3863a131114dbba0cf5db889fe6d3828",
+      "step": 80,
+      "alignment_steps": 80,
+      "metrics": {
+        "examples": 512,
+        "text_to_series_class": 0.810546875,
+        "text_to_image_class": 1.0,
+        "image_to_series_class": 0.857421875,
+        "accuracy": 1.0,
+        "forecast_mae": 0.1859191225634681,
+        "text_view_sensitivity_l2": 0.9503378197550774
+      }
+    },
+    {
+      "seed": 111000000,
+      "scope": "isolated",
+      "checkpoint_sha256": "4a0584f35716055435f561d341a8e822f22cce5b7f0e0e4cccbdea4bccbedaa6",
+      "step": 80,
+      "alignment_steps": 80,
+      "metrics": {
+        "examples": 512,
+        "text_to_series_class": 0.8203125,
+        "text_to_image_class": 1.0,
+        "image_to_series_class": 0.865234375,
+        "accuracy": 1.0,
+        "forecast_mae": 0.1970751459399859,
+        "text_view_sensitivity_l2": 0.0
+      }
+    },
+    {
+      "seed": 113000000,
+      "scope": "joint",
+      "checkpoint_sha256": "48be5dc3cd0d88bb808a475a71a94c261c2eec1dae8e26c55922c47a5e943d79",
+      "step": 80,
+      "alignment_steps": 80,
+      "metrics": {
+        "examples": 512,
+        "text_to_series_class": 0.802734375,
+        "text_to_image_class": 1.0,
+        "image_to_series_class": 0.99609375,
+        "accuracy": 1.0,
+        "forecast_mae": 0.18114456948306826,
+        "text_view_sensitivity_l2": 0.941208079457283
+      }
+    },
+    {
+      "seed": 113000000,
+      "scope": "isolated",
+      "checkpoint_sha256": "b7e8e19c6ac2ee8a8f8c2434ed6f11842a774cb0bf1b4e0c0e61bb9d5ffbc018",
+      "step": 80,
+      "alignment_steps": 80,
+      "metrics": {
+        "examples": 512,
+        "text_to_series_class": 0.96875,
+        "text_to_image_class": 1.0,
+        "image_to_series_class": 0.953125,
+        "accuracy": 1.0,
+        "forecast_mae": 0.19280688712994257,
+        "text_view_sensitivity_l2": 0.0
+      }
+    },
+    {
+      "seed": 115000000,
+      "scope": "joint",
+      "checkpoint_sha256": "ebaec174b5fac14fbb4f3333ed814c4c83723374ac2830a1b7e10cdcb71fbb07",
+      "step": 80,
+      "alignment_steps": 80,
+      "metrics": {
+        "examples": 512,
+        "text_to_series_class": 0.798828125,
+        "text_to_image_class": 1.0,
+        "image_to_series_class": 0.771484375,
+        "accuracy": 1.0,
+        "forecast_mae": 0.18609507381916046,
+        "text_view_sensitivity_l2": 0.9565562196075916
+      }
+    },
+    {
+      "seed": 115000000,
+      "scope": "isolated",
+      "checkpoint_sha256": "775d87e92b146d30476955d70ed132048b2267b249427f0b1a3db67372b679bd",
+      "step": 80,
+      "alignment_steps": 80,
+      "metrics": {
+        "examples": 512,
+        "text_to_series_class": 0.802734375,
+        "text_to_image_class": 1.0,
+        "image_to_series_class": 0.802734375,
+        "accuracy": 1.0,
+        "forecast_mae": 0.18436900443500942,
+        "text_view_sensitivity_l2": 0.0
+      }
+    }
+  ],
+  "aggregate": {
+    "text_to_series_class": {
+      "joint_mean": 0.8040364583333334,
+      "isolated_mean": 0.8639322916666666,
+      "paired_difference_mean": 0.059895833333333336,
+      "paired_difference_std": 0.09194912020449249
+    },
+    "text_to_image_class": {
+      "joint_mean": 1.0,
+      "isolated_mean": 1.0,
+      "paired_difference_mean": 0.0,
+      "paired_difference_std": 0.0
+    },
+    "image_to_series_class": {
+      "joint_mean": 0.875,
+      "isolated_mean": 0.8736979166666666,
+      "paired_difference_mean": -0.0013020833333333333,
+      "paired_difference_std": 0.0379395892821184
+    },
+    "accuracy": {
+      "joint_mean": 1.0,
+      "isolated_mean": 1.0,
+      "paired_difference_mean": 0.0,
+      "paired_difference_std": 0.0
+    },
+    "forecast_mae": {
+      "joint_mean": 0.18438625528856561,
+      "isolated_mean": 0.19141701250164597,
+      "paired_difference_mean": 0.0070307572130803575,
+      "paired_difference_std": 0.0075878582296016435
+    },
+    "text_view_sensitivity_l2": {
+      "joint_mean": 0.949367372939984,
+      "isolated_mean": 0.0,
+      "paired_difference_mean": -0.949367372939984,
+      "paired_difference_std": 0.007719953159448082
+    }
+  },
+  "scope": "Deux processus CPU et donn\u00e9es synth\u00e9tiques ; le texte contient la classe. Aucune g\u00e9n\u00e9ralisation r\u00e9elle n'est \u00e9tablie."
+}

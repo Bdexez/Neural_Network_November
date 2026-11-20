@@ -145,6 +145,24 @@ Le partage active plus souvent l'alignement mais ne constitue pas un gain géné
 
 Le dossier de sortie doit être nouveau. La comparaison conserve les logs et checkpoints locaux des deux modes et vérifie les empreintes des données et du checkpoint parent.
 
+### Comparaison du partage périodique
+
+Une seconde exécution reprend les mêmes données, le même checkpoint, les trois seeds et le budget précédent, en ajoutant un partage tous les deux micro-lots. Les étapes avec perte d'alignement non nulle sont de 37,3 en moyenne pour les lots répartis, 47,0 pour le partage périodique et 57,7 pour le partage complet. Les occurrences de lignes distinctes par étape, cumulées sur les 60 étapes, valent respectivement 480, 360 et 240.
+
+| Mesure moyenne | Répartis | Périodiques | Partagés |
+| --- | ---: | ---: | ---: |
+| Recherche texte–série : classe du premier voisin | 99,09 % | 99,74 % | 93,10 % |
+| Accuracy de classification, série seule | 87,50 % | 85,03 % | 84,64 % |
+| MAE de prévision, série seule | 0,18735 | 0,19223 | 0,19573 |
+
+La différence appariée entre partage périodique et répartition est de +0,65 point pour la recherche, avec un écart-type de 0,81 point, de −2,47 points pour la classification et de +0,00487 pour la MAE. La recherche est proche de son plafond sur ces données où le texte révèle la classe. Trois seeds, un seul checkpoint et un seul jeu de test synthétique ne démontrent pas un gain général ; l'indépendance vis-à-vis de l'entraînement du checkpoint parent reste inconnue. Les [mesures complètes](artifacts/periodic-modality-batches-study.json) conservent les résultats et empreintes des neuf entraînements.
+
+```bash
+.venv/bin/python tools/compare_shared_modality_batches.py \
+  --checkpoint runs/joint-affine-pilot/control/latest.pt \
+  --partial-interval 2 --output-dir runs/periodic-modality-study
+```
+
 Les nouveaux entraînements hétérogènes activent également `--alignment-cross-rank-views` : si le choix des modalités diffère entre rangs pour une ligne répétée, les vues de cette ligne peuvent former une paire même si aucun rang ne les possède simultanément. Cette option nécessite `--alignment-duplicate-positives`, agit seulement avec l'alignement global distribué et change l'objectif d'apprentissage. Elle est conservée dans le checkpoint ; les anciens checkpoints la gardent désactivée à la reprise. Les comparaisons incluent les identités de ligne puis, en mode `class`, les classes connues parmi les vues appariables. Les tests couvrent les matrices rectangulaires, les modalités manquantes et les gradients sur deux rangs CPU ; aucun gain sur données réelles n'est établi.
 
 Les lots répétés pour équilibrer les rangs peuvent présenter plusieurs vues de la même ligne. Les nouveaux entraînements avec `--mixed-modalities` transmettent l'indice stable de chaque ligne comme identité à la perte : les copies de cette ligne sont des positifs supplémentaires, plutôt que des négatifs dans l'alignement `paired`. `--alignment-duplicate-positives` active aussi ce comportement pour un jeu homogène ; l'option négative le désactive et les anciens checkpoints conservent leur réglage à la reprise. Les étiquettes de classe positives restent combinées aux identités lorsqu'elles sont activées. Ces répétitions affectent toujours les autres pertes et les poids des exemples ; les entrées augmentées sont supposées préserver leur correspondance.

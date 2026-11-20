@@ -227,6 +227,7 @@ def main(argv=None):
     search.add_argument("--query-batch-size", type=int, default=16)
     search.add_argument("--candidate-batch-size", type=int, default=1024)
     search.add_argument("--exclude-self", action="store_true")
+    search.add_argument("--skip-missing", action="store_true", help="Ignorer les lignes sans la modalité choisie")
     search.add_argument("--output", help="Fichier JSONL des voisins ; sinon stdout")
     retrieval = commands.add_parser("evaluate-retrieval", help="Mesurer la recherche sur des pertinences explicites")
     retrieval.add_argument("--queries", required=True)
@@ -594,7 +595,8 @@ def main(argv=None):
         with prediction_stream(args.output) as stream:
             for row in search_embeddings(args.queries, args.candidates, args.query_modality, args.candidate_modality,
                                          top_k=args.top_k, query_batch_size=args.query_batch_size,
-                                         candidate_batch_size=args.candidate_batch_size, exclude_self=args.exclude_self):
+                                         candidate_batch_size=args.candidate_batch_size, exclude_self=args.exclude_self,
+                                         skip_missing=args.skip_missing):
                 stream.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n")
                 count += 1
         if args.output:

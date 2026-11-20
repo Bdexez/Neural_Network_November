@@ -17,9 +17,13 @@ class EmbeddingFile:
     fields = ('format_version', 'checkpoint_sha256', 'dataset_sha256', 'dataset_images_sha256',
               'alignment_text_view', 'amp', 'device', 'batch_size', 'torch_version')
 
-    def __init__(self, path, modality):
+    def __init__(self, path, modality, *, skip_missing=False, track_presence=False):
         self.path = Path(path)
         self.modality = modality
+        self.skip_missing = skip_missing
+        self.track_presence = track_presence
+        self.presence = None
+        self.total_rows = None
         self.identity = file_identity(self.path.stat())
         self.sha256 = file_sha256(self.path)
         if file_identity(self.path.stat()) != self.identity:
@@ -29,7 +33,8 @@ class EmbeddingFile:
 
     def batches(self, size):
         digest = hashlib.sha256()
-        vectors, indexes, count = [], [], 0
+        vectors, indexes, count, selected = [], [], 0, 0
+        presence = bytearray() if self.track_presence else None
         with self.path.open('rb') as stream:
             if file_identity(os.fstat(stream.fileno())) != self.identity:
                 raise ValueError(f'Fichier de vecteurs modifié : {self.path}')
@@ -61,24 +66,36 @@ class EmbeddingFile:
                         self.metadata = metadata
                     elif self.metadata != metadata:
                         raise ValueError('métadonnées incohérentes')
-                    values = row['vectors'][self.modality]
-                    if (not isinstance(values, list) or not values or
-                            any(type(x) not in (int, float) or not math.isfinite(x) for x in values)):
-                        raise ValueError('vecteur non numérique ou non fini')
-                    if self.dim is None:
-                        self.dim = len(values)
-                    elif self.dim != len(values):
-                        raise ValueError('dimensions incohérentes')
-                    vector = torch.tensor(values, dtype=torch.float64)
-                    scale = vector.abs().max()
-                    if not torch.isfinite(scale) or scale == 0:
-                        raise ValueError('vecteur nul ou hors limites')
-                    vector = vector / scale
-                    vector = vector / vector.norm()
+                    modalities = row['vectors']
+                    if (not isinstance(modalities, dict) or not modalities
+                            or not any(name in modalities for name in ('text', 'image', 'series'))):
+                        raise ValueError('modalités de vecteurs invalides')
+                    present = self.modality in modalities
+                    if not present and not self.skip_missing:
+                        raise ValueError(f'modalité {self.modality} absente')
+                    if present:
+                        values = modalities[self.modality]
+                        if (not isinstance(values, list) or not values or
+                                any(type(x) not in (int, float) or not math.isfinite(x) for x in values)):
+                            raise ValueError('vecteur non numérique ou non fini')
+                        if self.dim is None:
+                            self.dim = len(values)
+                        elif self.dim != len(values):
+                            raise ValueError('dimensions incohérentes')
+                        vector = torch.tensor(values, dtype=torch.float64)
+                        scale = vector.abs().max()
+                        if not torch.isfinite(scale) or scale == 0:
+                            raise ValueError('vecteur nul ou hors limites')
+                        vector = vector / scale
+                        vector = vector / vector.norm()
                 except (ValueError, TypeError, KeyError, OverflowError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                     raise ValueError(f'{self.path}:{count + 1}: vecteur invalide : {exc}') from exc
-                vectors.append(vector)
-                indexes.append(count)
+                if presence is not None:
+                    presence.append(int(present))
+                if present:
+                    vectors.append(vector)
+                    indexes.append(count)
+                    selected += 1
                 count += 1
                 if len(vectors) == size:
                     yield torch.stack(vectors), torch.tensor(indexes, dtype=torch.long)
@@ -88,17 +105,20 @@ class EmbeddingFile:
                 raise ValueError(f'Fichier de vecteurs modifié : {self.path}')
         if count == 0:
             raise ValueError(f'Fichier de vecteurs vide : {self.path}')
+        if selected == 0:
+            raise ValueError(f'Aucun vecteur {self.modality} dans {self.path}')
+        self.total_rows, self.presence = count, presence
         if vectors:
             yield torch.stack(vectors), torch.tensor(indexes, dtype=torch.long)
 
 
 def search_embeddings(query_path, candidate_path, query_modality, candidate_modality, *, top_k=5,
-                      query_batch_size=16, candidate_batch_size=1024, exclude_self=False):
+                      query_batch_size=16, candidate_batch_size=1024, exclude_self=False, skip_missing=False):
     """Produire les voisins exacts, triés par score décroissant puis indice croissant."""
     if min(top_k, query_batch_size, candidate_batch_size) < 1:
         raise ValueError('top_k et les tailles de lot doivent être positifs')
-    queries = EmbeddingFile(query_path, query_modality)
-    candidates = EmbeddingFile(candidate_path, candidate_modality)
+    queries = EmbeddingFile(query_path, query_modality, skip_missing=skip_missing)
+    candidates = EmbeddingFile(candidate_path, candidate_modality, skip_missing=skip_missing)
     for query_vectors, query_indices in queries.batches(query_batch_size):
         best_scores = torch.empty((len(query_indices), 0), dtype=torch.float64)
         best_indices = torch.empty((len(query_indices), 0), dtype=torch.long)

@@ -168,6 +168,28 @@ class SeriesSetTests(unittest.TestCase):
                 self.assertIn(left['series_classifier_class_id'],right['series_prediction_set'])
             main(['evaluate',*common,'--series-probability',str(temp),'--series-set',str(sets),'--output',str(report)])
             result = json.loads(report.read_text())
+            self.assertNotIn('series_audited_sources', result)
+            audited_args = ['evaluate',*common,'--series-probability',str(temp),'--series-set',str(sets),
+                            '--classifier-data',str(train),'--probability-data',str(tuning),
+                            '--set-data',str(calib),'--output',str(report)]
+            main(audited_args)
+            self.assertEqual(json.loads(report.read_text())['series_audited_sources'],
+                             ['tête', 'température', 'ensemble'])
+            good_report = report.read_bytes()
+            contaminated_test = root / 'contaminated-test.jsonl'
+            rows = [json.loads(line) for line in test.read_text().splitlines()]
+            rows[0]['series'] = json.loads(calib.read_text().splitlines()[0])['series']
+            rows[0]['class_label'] = (rows[0]['class_label'] + 1) % config.num_classes
+            contaminated_test.write_text('\n'.join(json.dumps(row) for row in rows))
+            with self.assertRaisesRegex(ValueError, 'Historiques partagés'):
+                main([*audited_args, '--data', str(contaminated_test)])
+            self.assertEqual(report.read_bytes(), good_report)
+            with self.assertRaisesRegex(ValueError, 'empreinte'):
+                main([*audited_args, '--set-data', str(tuning)])
+            with self.assertRaises(SystemExit):
+                main([*audited_args, '--output', str(calib)])
+            with self.assertRaises(SystemExit):
+                main(['evaluate',*common,'--set-data',str(calib)])
             self.assertEqual(result['series_prediction_set_labeled_examples'],24)
             self.assertEqual(sum(result['series_prediction_set_counts_by_class']),24)
             self.assertGreaterEqual(result['series_prediction_set_mean_size'],1.)

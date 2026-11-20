@@ -52,6 +52,8 @@ Le fichier de calibration est distinct de la tête et lié aux SHA-256 exacts du
 
 L'option facultative `--classifier-data` fournit le JSONL d'ajustement de la tête : la commande vérifie son empreinte enregistrée, puis refuse tout historique `series` identique entre ce fichier et celui de calibration, même si les étiquettes ou les futurs diffèrent. La commande d'ensemble accepte aussi `--probability-data` pour comparer le jeu de température ; si les deux références sont fournies, toutes les paires sont comparées. Chaque référence doit correspondre exactement à l'empreinte de son artefact. L'audit conserve en mémoire des empreintes de tous les historiques distincts : son coût augmente avec la taille des jeux. Sans ces options, seule l'identité du fichier entier est détectée.
 
+L'évaluation accepte les mêmes références `--classifier-data` et `--probability-data`, ainsi que `--set-data` pour le jeu de calibration de l'ensemble. Chaque option exige l'artefact correspondant ; les empreintes sont vérifiées avant de comparer toutes les paires de jeux fournis avec le jeu de test. L'évaluation échoue en cas de série partagée, sans remplacer le rapport existant ; en cas de succès, `series_audited_sources` liste les références effectivement contrôlées.
+
 Ces comparaisons exactes ne détectent pas toutes les fuites : notamment, deux fenêtres différentes peuvent partager des pas temporels, et des transformations ou arrondis peuvent masquer une répétition. Auditer séparément les intervalles temporels avec [`audit-splits`](README.md#données-et-api) lorsque les métadonnées sont disponibles ; inclure aussi le jeu de test dans cet audit. Aucun de ces contrôles ne prouve l'indépendance statistique.
 
 L'ajustement ne conserve pas les historiques, mais stocke les scores des exemples étiquetés pour chercher la température : sa mémoire croît avec le produit du nombre d'exemples et du nombre de classes.
@@ -151,7 +153,9 @@ Une tête temporelle figée peut produire un ensemble de classes plutôt qu'une 
   --series-set ensemble.json --data test.jsonl --output predictions.jsonl
 .venv/bin/python -m chimera.cli evaluate \
   --checkpoint model.pt --series-classifier head.json --series-probability temperature.json \
-  --series-set ensemble.json --data test.jsonl --output report.json
+  --series-set ensemble.json --data test.jsonl --output report.json \
+  --classifier-data head-train.jsonl --probability-data temperature-calibration.jsonl \
+  --set-data ensemble-calibration.jsonl
 ```
 
 L'option `--series-probability` est facultative, mais doit être identique à l'ajustement et à l'utilisation : sans elle, la méthode utilise le softmax des scores bruts. Les empreintes lient l'ensemble à la tête, au checkpoint, à la température facultative et à la précision AMP. Le JSONL de calibration ne peut pas être identique à celui de la tête ou de la température ; des fichiers différents peuvent toutefois partager des exemples, ce que l'empreinte ne détecte pas. L'évaluation signale une réutilisation exacte du fichier de calibration, pas l'absence de recouvrement.

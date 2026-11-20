@@ -35,17 +35,17 @@ def same_file(first, second):
         return False
 
 
-def audit_series_calibration(data, dataset_sha256, references, *, output):
+def audit_series_calibration(data, dataset_sha256, references, *, output, subject="calibration"):
     """Comparer les historiques JSON exacts aux jeux d'ajustement fournis."""
     if not references:
         return
     for name, (path, digest) in references.items():
         if digest is None:
             raise ValueError(f"Empreinte du jeu {name} absente de l'artefact")
-    paths = {"calibration": data, **{name: path for name, (path, _) in references.items()}}
+    paths = {subject: data, **{name: path for name, (path, _) in references.items()}}
     report = audit_splits(paths, fields=("series",), output=output, max_examples=1)
-    if report["splits"]["calibration"]["sha256"] != dataset_sha256:
-        raise ValueError("Le jeu de calibration a changé pendant l'audit")
+    if report["splits"][subject]["sha256"] != dataset_sha256:
+        raise ValueError(f"Le jeu {subject} a changé pendant l'audit")
     for name, (_, digest) in references.items():
         if report["splits"][name]["sha256"] != digest:
             raise ValueError(f"Le jeu {name} ne correspond pas à l'empreinte de son artefact")
@@ -218,6 +218,9 @@ def main(argv=None):
     evaluation.add_argument("--series-set", help="Mesurer les ensembles conformes de classes")
     evaluation.add_argument("--iid-intervals", action="store_true",
                             help="Intervalles de Wilson : suppose des exemples de test indépendants et identiquement distribués")
+    evaluation.add_argument("--classifier-data", help="Jeu d'ajustement de la tête, à auditer")
+    evaluation.add_argument("--probability-data", help="Jeu d'ajustement de la température, à auditer")
+    evaluation.add_argument("--set-data", help="Jeu de calibration de l'ensemble conforme, à auditer")
     set_fit = commands.add_parser("calibrate-series-set", help="Calibrer les ensembles conformes de classes")
     set_fit.add_argument("--checkpoint", required=True)
     set_fit.add_argument("--series-classifier", required=True)
@@ -596,6 +599,14 @@ def main(argv=None):
             if not args.series_classifier:
                 parser.error("series-set nécessite series-classifier")
             sources.append(args.series_set)
+        if args.command == "evaluate":
+            for option, artifact, name in ((args.classifier_data, args.series_classifier, "classifier-data"),
+                                           (args.probability_data, args.series_probability, "probability-data"),
+                                           (args.set_data, args.series_set, "set-data")):
+                if option and not artifact:
+                    parser.error(f"{name} nécessite l'artefact correspondant")
+                if option:
+                    sources.append(option)
         if args.output and any(same_file(args.output, path) for path in sources):
             parser.error("Le fichier de sortie doit être distinct des fichiers d'entrée")
         model, _ = load_checkpoint(args.checkpoint, args.device)
@@ -632,8 +643,18 @@ def main(argv=None):
         series_set = SeriesPredictionSet.load(args.series_set) if args.series_set else None
         if series_set is not None:
             series_set.validate_files(args.checkpoint, args.series_classifier, args.series_probability)
+        references = {}
+        if args.classifier_data:
+            references["tête"] = (args.classifier_data, series_classifier.dataset_sha256)
+        if args.probability_data:
+            references["température"] = (args.probability_data, series_probability.dataset_sha256)
+        if args.set_data:
+            references["ensemble"] = (args.set_data, series_set.dataset_sha256)
+        audit_series_calibration(args.data, dataset.fingerprint, references, output=args.output, subject="test")
         report = evaluate(model, loader, args.amp, calibration=calibration, series_classifier=series_classifier,
                           series_probability=series_probability, series_set=series_set, iid_intervals=args.iid_intervals)
+        if references:
+            report["series_audited_sources"] = list(references)
         if calibration is not None:
             identical = (dataset.fingerprint == calibration.dataset_sha256
                          if calibration.dataset_sha256 is not None else None)

@@ -121,7 +121,8 @@ class JointDataset(Dataset):
             return False
         return any(identity == known[:2] for known in self._image_identities.values())
 
-    def __getitem__(self, index):
+    def read_record(self, index):
+        """Lire l'objet JSON indexé sans décoder ses images ni convertir ses tableaux."""
         with self.path.open("rb") as stream:
             if file_identity(os.fstat(stream.fileno())) != self._identity:
                 raise ValueError(f"Le jeu de données a changé après son indexation : {self.path}")
@@ -130,7 +131,10 @@ class JointDataset(Dataset):
             if (file_identity(os.fstat(stream.fileno())) != self._identity
                     or file_identity(self.path.stat()) != self._identity):
                 raise ValueError(f"Le jeu de données a changé pendant sa lecture : {self.path}")
-        record = json.loads(line)
+        return json.loads(line)
+
+    def __getitem__(self, index):
+        record = self.read_record(index)
         try:
             item = self._convert(record)
             if self.include_alignment_ids:

@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import torch
 from torch.utils.data import DataLoader
@@ -32,6 +33,15 @@ class ModalityBatchSamplerTests(unittest.TestCase):
         self.assertEqual(list(self.dataset.signatures), [1] * 5 + [4] * 3 + [5])
         self.assertEqual(self.dataset.fingerprint, __import__('hashlib').sha256(self.path.read_bytes()).hexdigest())
         self.assertIn('series', self.dataset[5])
+
+    def test_raw_records_are_indexed_without_conversion_and_detect_changes(self):
+        with patch.object(self.dataset, '_convert', side_effect=AssertionError('conversion inattendue')):
+            raw = self.dataset.read_record(5)
+        self.assertEqual(raw['class_label'], 1)
+        self.assertIsInstance(raw['series'], list)
+        self.path.write_text(self.path.read_text() + '\n')
+        with self.assertRaisesRegex(ValueError, 'changé'):
+            self.dataset.read_record(5)
 
     def test_optional_source_id_is_stable_across_copies_and_negative_indices(self):
         dataset = JointDataset(self.path, self.config, allow_mixed=True, include_alignment_ids=True)

@@ -11,7 +11,7 @@ from .probability_metrics import ProbabilityMetrics
 from .series_probability import log_probabilities
 
 
-def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=None, series_probability=None):
+def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=None, series_probability=None, series_set=None):
     if amp not in ("none", "bf16", "fp16"):
         raise ValueError("amp doit être none, bf16 ou fp16")
     if calibration is not None:
@@ -22,6 +22,10 @@ def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=
         if series_classifier is None:
             raise ValueError("La calibration de probabilités nécessite une tête temporelle")
         series_probability.validate(series_classifier, amp=amp)
+    if series_set is not None:
+        if series_classifier is None:
+            raise ValueError("Les ensembles conformes nécessitent une tête temporelle")
+        series_set.validate(series_classifier, series_probability, amp=amp)
     was_training = model.training
     model.eval()
     device = next(model.parameters()).device
@@ -33,6 +37,10 @@ def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=
     series_class_confusion = Counter() if series_classifier is not None else None
     probability_raw = ProbabilityMetrics() if series_probability is not None else None
     probability_calibrated = ProbabilityMetrics() if series_probability is not None else None
+    set_examples = set_size = set_singletons = set_labeled = set_covered = 0
+    set_labeled_singletons = set_correct_singletons = 0
+    set_class_counts = torch.zeros(model.config.num_classes, dtype=torch.long)
+    set_class_covered = torch.zeros_like(set_class_counts)
     complete_forecasts = raw_joint_covered = calibrated_joint_covered = 0
     absolute = squared = covered = width = 0.0
     horizon_error = torch.zeros(model.config.forecast_horizon, dtype=torch.float64)
@@ -96,6 +104,15 @@ def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=
                 with autocast():
                     output = model(**batch)
                     series_scores = series_classifier.scores(model, batch) if series_classifier is not None else None
+                set_mask = None
+                if series_set is not None:
+                    probs = (series_probability.probabilities(series_scores) if series_probability
+                             else log_probabilities(series_scores).exp())
+                    set_mask = series_set.predict(probs, series_scores.argmax(-1))
+                    sizes = set_mask.sum(-1)
+                    set_examples += sizes.numel()
+                    set_size += sizes.sum().item()
+                    set_singletons += (sizes == 1).sum().item()
                 usage = getattr(output, "expert_usage", None)
                 routed = getattr(output, "routed_tokens", None)
                 if usage is not None and routed is not None:
@@ -117,6 +134,17 @@ def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=
                     weights["classification"] = observed.sum().item()
                     correct += ((output.classification_logits.argmax(-1) == labels) & observed).sum().item()
                     class_count += weights["classification"]
+                    if set_mask is not None and observed.any():
+                        selected = set_mask[observed]
+                        observed_labels = labels[observed]
+                        hits = selected.gather(1, observed_labels.unsqueeze(1)).squeeze(1)
+                        singletons = selected.sum(-1) == 1
+                        set_labeled += observed_labels.numel()
+                        set_covered += hits.sum().item()
+                        set_labeled_singletons += singletons.sum().item()
+                        set_correct_singletons += (hits & singletons).sum().item()
+                        set_class_counts += torch.bincount(observed_labels.cpu(), minlength=model.config.num_classes)
+                        set_class_covered += torch.bincount(observed_labels[hits].cpu(), minlength=model.config.num_classes)
                     if series_scores is not None:
                         predictions = series_scores.argmax(-1)
                         series_class_correct += ((predictions == labels) & observed).sum().item()
@@ -229,6 +257,19 @@ def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=
             result["series_classifier_probability_metrics"] = dict(
                 uncalibrated=probability_raw.result(), calibrated=probability_calibrated.result())
             result["series_classifier_inverse_temperature"] = series_probability.inverse_temperature
+        if series_set is not None:
+            result.update(series_prediction_set_method=series_set.method,
+                          series_prediction_set_nominal_coverage=series_set.coverage,
+                          series_prediction_set_examples=set_examples,
+                          series_prediction_set_labeled_examples=set_labeled,
+                          series_prediction_set_coverage=set_covered / set_labeled if set_labeled else None,
+                          series_prediction_set_mean_size=set_size / set_examples if set_examples else None,
+                          series_prediction_set_singleton_rate=set_singletons / set_examples if set_examples else None,
+                          series_prediction_set_singleton_accuracy=(set_correct_singletons / set_labeled_singletons
+                                                                    if set_labeled_singletons else None),
+                          series_prediction_set_counts_by_class=set_class_counts.tolist(),
+                          series_prediction_set_coverage_by_class=[hits.item() / count.item() if count else None
+                              for hits, count in zip(set_class_covered, set_class_counts)])
         if "loss" in result:
             # Chaque tâche est d'abord agrégée selon son nombre de cibles ; les
             # termes auxiliaires conservent leur agrégation par lot existante.

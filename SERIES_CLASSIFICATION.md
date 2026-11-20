@@ -132,3 +132,41 @@ La forme améliore la tête moyenne sur plusieurs conditions, mais régresse de 
   --test-seed 50000000 --mask-seed 51000000 \
   --output runs/series-shape-classifier-study.json
 ```
+
+## Ensembles conformes de classes
+
+Une tête temporelle figée peut produire un ensemble de classes plutôt qu'une seule réponse. Prévoir un jeu supplémentaire, réservé à cette étape et distinct de ceux utilisés pour ajuster la tête et, le cas échéant, la température :
+
+```bash
+.venv/bin/python -m chimera.cli calibrate-series-set \
+  --checkpoint model.pt --series-classifier head.json --series-probability temperature.json \
+  --data ensemble-calibration.jsonl --coverage 0.9 --method aps --output ensemble.json
+.venv/bin/python -m chimera.cli predict \
+  --checkpoint model.pt --series-classifier head.json --series-probability temperature.json \
+  --series-set ensemble.json --data test.jsonl --output predictions.jsonl
+.venv/bin/python -m chimera.cli evaluate \
+  --checkpoint model.pt --series-classifier head.json --series-probability temperature.json \
+  --series-set ensemble.json --data test.jsonl --output report.json
+```
+
+L'option `--series-probability` est facultative, mais doit être identique à l'ajustement et à l'utilisation : sans elle, la méthode utilise le softmax des scores bruts. Les empreintes lient l'ensemble à la tête, au checkpoint, à la température facultative et à la précision AMP. Le JSONL de calibration ne peut pas être identique à celui de la tête ou de la température ; des fichiers différents peuvent toutefois partager des exemples, ce que l'empreinte ne détecte pas. L'évaluation signale une réutilisation exacte du fichier de calibration, pas l'absence de recouvrement.
+
+`lac` classe les candidats par score `1 - probabilité`. `aps` utilise la somme des probabilités décroissantes jusqu'à chaque candidat, avec départage stable par indice : c'est une variante déterministe, sans randomisation, inspirée des ensembles adaptatifs de [Romano, Sesia et Candès](https://arxiv.org/abs/2006.02544). Le seuil est le rang `ceil((n+1) × couverture)` des scores de calibration ; si ce rang dépasse le nombre d'exemples étiquetés, la commande échoue. Les candidats au seuil sont inclus et la classe de score maximal est toujours ajoutée. L'évaluation donne la couverture globale, la taille moyenne, la fréquence et l'accuracy des ensembles à une classe, ainsi que les couvertures par classe.
+
+Avec un prédicteur fixé avant la calibration et des exemples de calibration et de test échangeables, la construction conforme fournit une couverture **marginale** d'au moins le niveau demandé, sur la répétition des tirages. Elle ne garantit pas la couverture de chaque classe ou de chaque exemple. Un décalage de distribution, une dépendance temporelle ou une sélection de données peuvent invalider l'hypothèse d'échangeabilité.
+
+### Essai synthétique
+
+Sur le checkpoint `tiny` utilisé ci-dessus, quatre plages de seeds servent respectivement à ajuster la tête (3 072 exemples), la température (1 024), le seuil conforme (1 024) et à tester (2 048). Chaque lot contient des historiques de même longueur, alternant 8, 16 et 32 pas ; les exemples ne sont donc pas tous échangeables au sens requis par la garantie. Un masquage indépendant de 30 % est appliqué à la moitié des historiques. Les deux méthodes utilisent les mêmes données, une cible de 90 % et une température commune :
+
+| Méthode | Couverture mesurée | Taille moyenne | Ensembles à une classe | Accuracy de ces ensembles |
+| --- | ---: | ---: | ---: | ---: |
+| LAC | 88,13 % | 2,32 | 22,12 % | 74,61 % |
+| Cumulatif déterministe | 93,02 % | 3,08 | 12,45 % | 76,86 % |
+
+Dans cet essai, la couverture par classe varie de 77,87 % à 100 % pour LAC et de 86,55 % à 100 % pour le score cumulatif. Le décalage apparié de +20 donne les mêmes résultats ; cela ne garantit pas une robustesse générale. Cette mesure unique, synthétique et avec un seul checkpoint ne prouve pas la couverture sur des données réelles. Les [résultats complets](artifacts/series-set-study.json) incluent les seeds, seuils et comptes par classe.
+
+```bash
+.venv/bin/python tools/benchmark_series_sets.py \
+  --checkpoint runs/joint-affine-pilot/control/latest.pt --output runs/series-set-study.json
+```

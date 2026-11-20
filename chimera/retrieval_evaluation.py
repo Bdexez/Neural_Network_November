@@ -52,6 +52,12 @@ def evaluate_retrieval(query_path, candidate_path, relevance_path, query_modalit
             header = json.loads(header_line)
             if not isinstance(header, dict) or type(header.get('format_version')) is not int or header['format_version'] != 1:
                 raise ValueError('version de pertinence inconnue')
+            if 'class_label_relevance' in header:
+                policy = header['class_label_relevance']
+                if (not isinstance(policy, dict) or policy.get('query_modality') != query_modality
+                        or policy.get('candidate_modality') != candidate_modality
+                        or type(policy.get('exclude_self')) is not bool or policy['exclude_self'] != exclude_self):
+                    raise ValueError('modalités ou exclusion incompatibles avec les jugements de classe')
             for prefix, source in (('query', queries), ('candidate', candidates)):
                 if (header[f'{prefix}_dataset_sha256'] != source.metadata['dataset_sha256'] or
                         header[f'{prefix}_dataset_images_sha256'] != source.metadata['dataset_images_sha256']):

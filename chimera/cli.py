@@ -19,6 +19,7 @@ from .embedding_search import search_embeddings
 from .model import Chimera
 from .modality_batch_sampler import OrderedModalityBatchSampler
 from .retrieval_evaluation import evaluate_retrieval
+from .retrieval_relevance import write_class_relevance
 from .series_classifier import SeriesClassifier, fit_series_classifier
 from .series_gate import SeriesGate, fit_series_gate
 from .series_gate_guard import SeriesGateGuard, fit_series_gate_guard
@@ -237,6 +238,16 @@ def main(argv=None):
     search.add_argument("--exclude-self", action="store_true")
     search.add_argument("--skip-missing", action="store_true", help="Ignorer les lignes sans la modalité choisie")
     search.add_argument("--output", help="Fichier JSONL des voisins ; sinon stdout")
+    relevance = commands.add_parser("prepare-class-relevance", help="Construire les pertinences par égalité de classe")
+    relevance.add_argument("--query-data", required=True)
+    relevance.add_argument("--candidate-data", required=True)
+    relevance.add_argument("--queries", required=True, help="Vecteurs des requêtes")
+    relevance.add_argument("--candidates", required=True, help="Vecteurs des candidats")
+    relevance.add_argument("--query-modality", choices=("text", "image", "series"), required=True)
+    relevance.add_argument("--candidate-modality", choices=("text", "image", "series"), required=True)
+    relevance.add_argument("--exclude-self", action="store_true")
+    relevance.add_argument("--batch-size", type=int, default=1024, help="Taille de lecture des vecteurs")
+    relevance.add_argument("--output", help="Fichier JSONL de pertinence ; sinon stdout")
     retrieval = commands.add_parser("evaluate-retrieval", help="Mesurer la recherche sur des pertinences explicites")
     retrieval.add_argument("--queries", required=True)
     retrieval.add_argument("--candidates", required=True)
@@ -610,6 +621,22 @@ def main(argv=None):
                 count += 1
         if args.output:
             print(f"{count} recherches écrites dans {args.output}")
+    elif args.command == "prepare-class-relevance":
+        if args.batch_size < 1:
+            parser.error("batch-size doit être >= 1")
+        sources = (args.query_data, args.candidate_data, args.queries, args.candidates)
+        if args.output and any(same_file(args.output, path) for path in sources):
+            parser.error("Le fichier de pertinence doit être distinct des fichiers d'entrée")
+        query_dataset = JointDataset(args.query_data, None, allow_mixed=True)
+        candidate_dataset = JointDataset(args.candidate_data, None, allow_mixed=True)
+        if any(dataset.references_image(args.output) for dataset in (query_dataset, candidate_dataset)):
+            parser.error("Le fichier de pertinence doit être distinct des images d'entrée")
+        with prediction_stream(args.output) as stream:
+            report = write_class_relevance(query_dataset, candidate_dataset, args.queries, args.candidates,
+                                           args.query_modality, args.candidate_modality, stream,
+                                           exclude_self=args.exclude_self, batch_size=args.batch_size)
+        if args.output:
+            print(json.dumps(dict(output=args.output, **report), ensure_ascii=False))
     elif args.command == "evaluate-retrieval":
         if min(args.top_k, args.query_batch_size, args.candidate_batch_size) < 1:
             parser.error("top-k et les tailles de lot doivent être >= 1")

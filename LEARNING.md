@@ -123,6 +123,28 @@ Le dossier de sortie doit être nouveau. L'outil vérifie que les plages de seed
 
 La répartition habituelle envoie généralement des lots distincts à chaque rang : les identités complémentaires peuvent alors ne pas coïncider pendant une étape donnée. `--shared-modality-batches` fait parcourir les mêmes lots JSONL par tous les rangs, dans le même ordre. Avec la politique `balanced`, le calendrier de modalités est indexé par rang et peut fournir différentes vues d'une même ligne au calcul global. Cette stratégie traite moins de lignes distinctes par étape que des lots répartis ; les pertes supervisées portent sur des vues répétées et le coût d'encodage augmente pour un même nombre de lignes uniques. Le résultat dépend de la politique de modalités, des augmentations et des données : il faut mesurer les compromis. L'option nécessite `--mixed-modalities` et `--data` ; elle reste désactivée par défaut et son état est conservé à la reprise.
 
+### Comparaison synthétique des lots partagés
+
+Deux rangs CPU affinent le même checkpoint `tiny` pendant 60 étapes sur 48 lignes synthétiques texte–série, avec trois seeds appariées, quatre lignes par rang, la politique de modalités équilibrée, la vue textuelle isolée et l'alignement global par classe. Le test utilise 256 autres exemples en lots de 32 ; le texte indique explicitement la classe. Les données d'ajustement, de validation et de test de cet essai utilisent des seeds distinctes. L'indépendance des données d'entraînement du checkpoint initial n'est pas établie.
+
+| Mesure moyenne | Lots répartis | Lots partagés |
+| --- | ---: | ---: |
+| Recherche texte–série : classe du premier voisin | 99,09 % | 93,10 % |
+| Accuracy de classification, série seule | 87,50 % | 84,64 % |
+| MAE de prévision, série seule | 0,18735 | 0,19573 |
+| Étapes avec perte d'alignement non nulle, sur 60 | 37,3 | 57,7 |
+| Occurrences de lignes distinctes par étape, cumulées | 480 | 240 |
+
+Le partage active plus souvent l'alignement mais ne constitue pas un gain général dans cet essai : la différence moyenne appariée de recherche est de −5,99 points, avec un écart-type de 9,73 points entre trois seeds. La baisse est surtout liée à une seed ; la MAE augmente de 0,00838 en moyenne. Le même nombre de vues est traité dans les deux modes, mais les lots partagés contiennent deux fois moins de lignes distinctes par étape. La recherche accepte toute série de même classe : elle ne mesure pas l'identification d'une paire unique. Les données synthétiques faciles, un seul checkpoint et trois entraînements ne permettent pas de conclure pour des données réelles. Les [mesures complètes](artifacts/shared-modality-batches-study.json) incluent les seeds, empreintes et temps observés, qui comprennent le lancement des processus.
+
+```bash
+.venv/bin/python tools/compare_shared_modality_batches.py \
+  --checkpoint runs/joint-affine-pilot/control/latest.pt \
+  --output-dir runs/shared-modality-study
+```
+
+Le dossier de sortie doit être nouveau. La comparaison conserve les logs et checkpoints locaux des deux modes et vérifie les empreintes des données et du checkpoint parent.
+
 Les nouveaux entraînements hétérogènes activent également `--alignment-cross-rank-views` : si le choix des modalités diffère entre rangs pour une ligne répétée, les vues de cette ligne peuvent former une paire même si aucun rang ne les possède simultanément. Cette option nécessite `--alignment-duplicate-positives`, agit seulement avec l'alignement global distribué et change l'objectif d'apprentissage. Elle est conservée dans le checkpoint ; les anciens checkpoints la gardent désactivée à la reprise. Les comparaisons incluent les identités de ligne puis, en mode `class`, les classes connues parmi les vues appariables. Les tests couvrent les matrices rectangulaires, les modalités manquantes et les gradients sur deux rangs CPU ; aucun gain sur données réelles n'est établi.
 
 Les lots répétés pour équilibrer les rangs peuvent présenter plusieurs vues de la même ligne. Les nouveaux entraînements avec `--mixed-modalities` transmettent l'indice stable de chaque ligne comme identité à la perte : les copies de cette ligne sont des positifs supplémentaires, plutôt que des négatifs dans l'alignement `paired`. `--alignment-duplicate-positives` active aussi ce comportement pour un jeu homogène ; l'option négative le désactive et les anciens checkpoints conservent leur réglage à la reprise. Les étiquettes de classe positives restent combinées aux identités lorsqu'elles sont activées. Ces répétitions affectent toujours les autres pertes et les poids des exemples ; les entrées augmentées sont supposées préserver leur correspondance.

@@ -1,0 +1,155 @@
+{
+  "settings": {
+    "checkpoint": "runs/joint-affine-pilot/control/latest.pt",
+    "output_dir": "<dossier temporaire>",
+    "seeds": [
+      211000000,
+      213000000,
+      215000000
+    ],
+    "steps": 60,
+    "train_examples": 48,
+    "batch_size": 4,
+    "train_seed": 210000000,
+    "test_seed": 220000000,
+    "test_batches": 8,
+    "test_batch_size": 32,
+    "lr": 0.0003,
+    "alignment_weight": 0.2
+  },
+  "parent_sha256": "2d2b6619ddf019a83f2458343b8665d091e62d1513507b9f7f8c97533e45fe43",
+  "train_data_sha256": "e453b2e3396bc4c1f85198ff6b1573ec9b9badb5f1d4e7734cd11a8b9b15c59d",
+  "torch_version": "2.15.0+cpu",
+  "runs": [
+    {
+      "seed": 211000000,
+      "mode": "sharded",
+      "step": 60,
+      "checkpoint_sha256": "e498282ce7cf517416ee36b1415d15c9458b2cd200fef00d4861e06120853d78",
+      "elapsed_seconds": 4.1953860170033295,
+      "exposure": {
+        "sample_views": 480,
+        "unique_examples_per_step_sum": 480
+      },
+      "nonzero_alignment_steps": 36,
+      "metrics": {
+        "examples": 256,
+        "text_to_series_class_top1": 0.98046875,
+        "series_class_accuracy": 0.92578125,
+        "series_forecast_mae": 0.1874414798286226
+      }
+    },
+    {
+      "seed": 211000000,
+      "mode": "shared",
+      "step": 60,
+      "checkpoint_sha256": "c1b8defa4a41cdf99f5605dac9ada5934c219a0d5b2b15f8eabc167b555040d5",
+      "elapsed_seconds": 4.093771102998289,
+      "exposure": {
+        "sample_views": 480,
+        "unique_examples_per_step_sum": 240
+      },
+      "nonzero_alignment_steps": 57,
+      "metrics": {
+        "examples": 256,
+        "text_to_series_class_top1": 0.96875,
+        "series_class_accuracy": 0.75,
+        "series_forecast_mae": 0.18815208640363482
+      }
+    },
+    {
+      "seed": 213000000,
+      "mode": "sharded",
+      "step": 60,
+      "checkpoint_sha256": "201921c569141afd40cbe687190aa950da3d3e70557384645f16e88b9e193309",
+      "elapsed_seconds": 4.330991458991775,
+      "exposure": {
+        "sample_views": 480,
+        "unique_examples_per_step_sum": 480
+      },
+      "nonzero_alignment_steps": 39,
+      "metrics": {
+        "examples": 256,
+        "text_to_series_class_top1": 0.99609375,
+        "series_class_accuracy": 0.890625,
+        "series_forecast_mae": 0.1870398223400116
+      }
+    },
+    {
+      "seed": 213000000,
+      "mode": "shared",
+      "step": 60,
+      "checkpoint_sha256": "f2b6268e67a98eb045813863339d72003a55d4774a55a0bbe9188e9b5c2ad7bc",
+      "elapsed_seconds": 4.20992891601054,
+      "exposure": {
+        "sample_views": 480,
+        "unique_examples_per_step_sum": 240
+      },
+      "nonzero_alignment_steps": 57,
+      "metrics": {
+        "examples": 256,
+        "text_to_series_class_top1": 1.0,
+        "series_class_accuracy": 0.91796875,
+        "series_forecast_mae": 0.19513655536704594
+      }
+    },
+    {
+      "seed": 215000000,
+      "mode": "sharded",
+      "step": 60,
+      "checkpoint_sha256": "64b333dc548184129b0a5f37a41126fe2f98cc91c7e433444311cd9c8a7313f1",
+      "elapsed_seconds": 4.092446861002827,
+      "exposure": {
+        "sample_views": 480,
+        "unique_examples_per_step_sum": 480
+      },
+      "nonzero_alignment_steps": 37,
+      "metrics": {
+        "examples": 256,
+        "text_to_series_class_top1": 0.99609375,
+        "series_class_accuracy": 0.80859375,
+        "series_forecast_mae": 0.18757078382703993
+      }
+    },
+    {
+      "seed": 215000000,
+      "mode": "shared",
+      "step": 60,
+      "checkpoint_sha256": "5e9743b2242131c449658f20b780854e93787a5c02b60dc00b5b5ccc1110ee09",
+      "elapsed_seconds": 4.289890006009955,
+      "exposure": {
+        "sample_views": 480,
+        "unique_examples_per_step_sum": 240
+      },
+      "nonzero_alignment_steps": 59,
+      "metrics": {
+        "examples": 256,
+        "text_to_series_class_top1": 0.82421875,
+        "series_class_accuracy": 0.87109375,
+        "series_forecast_mae": 0.20390499465995365
+      }
+    }
+  ],
+  "aggregate": {
+    "text_to_series_class_top1": {
+      "sharded_mean": 0.9908854166666666,
+      "shared_mean": 0.9309895833333334,
+      "paired_difference_mean": -0.059895833333333336,
+      "paired_difference_std": 0.09729098355845126
+    },
+    "series_class_accuracy": {
+      "sharded_mean": 0.875,
+      "shared_mean": 0.8463541666666666,
+      "paired_difference_mean": -0.028645833333333332,
+      "paired_difference_std": 0.1286297539715086
+    },
+    "series_forecast_mae": {
+      "sharded_mean": 0.1873506953318914,
+      "shared_mean": 0.1957312121435448,
+      "paired_difference_mean": 0.008380516811653424,
+      "paired_difference_std": 0.007815667113509195
+    }
+  },
+  "scope": "Données synthétiques ; le texte indique la classe. Le partage traite moins de lignes uniques par étape ; l'indépendance vis-à-vis de l'entraînement du checkpoint parent n'est pas établie.",
+  "source_commit": "8451cf7"
+}

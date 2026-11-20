@@ -209,6 +209,8 @@ def main(argv=None):
     export = commands.add_parser("export", help="Exporter les poids sans l'optimiseur pour l'inférence")
     export.add_argument("--checkpoint", required=True)
     export.add_argument("--output", required=True)
+    export.add_argument("--stable-rms-norm", action="store_true",
+                        help="Activer la normalisation RMS stable dans un nouveau checkpoint d'inférence")
     evaluation = commands.add_parser("evaluate", help="Évaluer un checkpoint sur un fichier JSONL indépendant")
     evaluation.add_argument("--checkpoint", required=True)
     evaluation.add_argument("--data", required=True)
@@ -511,9 +513,17 @@ def main(argv=None):
         if args.output:
             print(f"{count} prédictions écrites dans {args.output}")
     elif args.command == "export":
-        model, payload = load_checkpoint(args.checkpoint)
+        if args.stable_rms_norm and same_file(args.output, args.checkpoint):
+            parser.error("Le checkpoint stable doit être distinct du checkpoint source")
+        parent_sha = file_sha256(args.checkpoint) if args.stable_rms_norm else None
+        model, payload = load_checkpoint(args.checkpoint, mmap=not args.stable_rms_norm,
+                                         overrides={"stable_rms_norm": True} if args.stable_rms_norm else None)
         step = payload["step"]
         trainer = dict(payload.get("trainer", {}), inference_only=True)
+        if args.stable_rms_norm:
+            if file_sha256(args.checkpoint) != parent_sha:
+                raise ValueError("Le checkpoint source a changé pendant l'export")
+            trainer.update(stable_rms_norm_parent_sha256=parent_sha)
         del payload
         save_checkpoint(args.output, model, step=step, trainer=trainer)
         print(f"Poids d'inférence écrits dans {args.output}")

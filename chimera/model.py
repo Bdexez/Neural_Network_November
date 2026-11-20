@@ -73,6 +73,10 @@ class Chimera(nn.Module):
         self.alignment = nn.ModuleList([nn.Linear(d, d, bias=False) for _ in range(3)])
         self.forecast_adapter = ForecastAdapter(config) if config.forecast_adapter_context else None
         self.apply(self._initialize)
+        if config.stable_rms_norm:
+            for module in self.modules():
+                if isinstance(module, RMSNorm):
+                    module.stable = True
         nn.init.zeros_(self.temporal.forecast_skip.weight)
         if self.temporal.statistics_proj is not None:
             nn.init.zeros_(self.temporal.statistics_proj.weight)

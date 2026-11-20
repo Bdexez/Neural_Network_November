@@ -12,13 +12,26 @@ from .temporal_precision import temporal_work_dtype
 
 
 class RMSNorm(nn.Module):
-    def __init__(self, dim, eps=1e-6):
+    def __init__(self, dim, eps=1e-6, *, stable=False):
         super().__init__()
+        if type(stable) is not bool:
+            raise ValueError("stable doit être booléen")
         self.weight = nn.Parameter(torch.ones(dim))
         self.eps = eps
+        self.stable = stable
 
     def forward(self, x):
-        normalized = x.float() * torch.rsqrt(x.float().square().mean(-1, keepdim=True) + self.eps)
+        if not self.stable:
+            normalized = x.float() * torch.rsqrt(x.float().square().mean(-1, keepdim=True) + self.eps)
+        else:
+            # Le facteur détaché s'élimine algébriquement ; il borne les carrés
+            # sans modifier le gradient, même pour des activations très grandes.
+            fp32 = torch.finfo(torch.float32)
+            dtype = torch.float64 if x.dtype == torch.float64 or not fp32.tiny <= self.eps <= fp32.max else torch.float32
+            value = x.to(dtype=dtype)
+            scale = value.detach().abs().amax(-1, keepdim=True).clamp_min(1.)
+            scaled = value / scale
+            normalized = scaled * torch.rsqrt(scaled.square().mean(-1, keepdim=True) + (self.eps / scale) / scale)
         return normalized.to(x.dtype) * self.weight
 
 

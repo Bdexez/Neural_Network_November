@@ -22,6 +22,7 @@ class ChimeraConfig:
     rope_theta: float = 10000.0
     dropout: float = 0.0
     norm_eps: float = 1e-6
+    stable_rms_norm: bool = False
     image_size: int = 64
     image_channels: int = 3
     patch_size: int = 8
@@ -89,6 +90,8 @@ class ChimeraConfig:
             raise ValueError("rope_theta doit être fini et > 1")
         if not math.isfinite(self.norm_eps) or self.norm_eps <= 0:
             raise ValueError("norm_eps doit être fini et > 0")
+        if type(self.stable_rms_norm) is not bool:
+            raise ValueError("stable_rms_norm doit être booléen")
         if self.alignment_mode not in ("paired", "class"):
             raise ValueError("alignment_mode doit être paired ou class")
         if not math.isfinite(self.alignment_temperature) or self.alignment_temperature <= 0:

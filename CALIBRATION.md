@@ -67,6 +67,10 @@ L'évaluation ajoute `forecast_complete_examples`, `forecast_joint_interval_cove
 
 L'évaluation affiche couverture et largeur, globalement et par horizon, ainsi que la largeur par variable (`forecast_interval_width_by_feature` et `calibrated_interval_width_by_feature`). Elle ajoute aussi le [score d'intervalle de Gneiting et Raftery](https://sites.stat.washington.edu/raftery/Research/PDF/Gneiting2007jasa.pdf), orienté vers les petites valeurs : `largeur + 2/(1-c) × erreurs hors intervalle`. C'est le score d'un intervalle central de niveau `c`, y compris lorsque les quantiles de départ sont asymétriques. Il pénalise à la fois les intervalles trop larges et les observations manquées. Comparer les scores à couverture nominale identique.
 
+Pour identifier les disparités masquées par une moyenne, les rapports fournissent aussi les effectifs observés et la MAE par horizon, par variable et par couple `[horizon, variable]`, ainsi que la couverture brute et calibrée des intervalles par variable et par couple. Les champs `forecast_interval_below_by_feature` et `forecast_interval_above_by_feature`, et leurs équivalents `calibrated_…`, indiquent les fractions strictement sous et au-dessus des bornes ; une cible sur une borne est comptée comme couverte. Une coordonnée sans cible finie a un effectif nul et une mesure `null`.
+
+Les quantiles bruts sont décrits par `forecast_quantile_levels`, `forecast_quantile_coverage` et `forecast_pinball_by_quantile`. La couverture est la fraction observée de cibles inférieures ou égales à la prévision de chaque quantile ; le score pinball moyen est d'autant meilleur qu'il est petit. Les versions `forecast_quantile_coverage_by_feature` et `forecast_pinball_by_feature_quantile` ont la forme `[variables, quantiles]`. Elles évaluent les quantiles du réseau, non les bornes calibrées. Dans des distributions avec valeurs ex æquo, la fraction inférieure ou égale peut dépasser le niveau nominal même pour un quantile correct. Ces mesures sont descriptives : les effectifs par coordonnée et la dépendance entre fenêtres doivent être pris en compte avant toute conclusion.
+
 ## Comparaison avec des échelles différentes
 
 Un second essai utilise le checkpoint `tiny` du contrôle joint-affine après 180 étapes et multiplie les trois variables de séries et leurs cibles par 0,1, 1 et 10. Il utilise 512 trajectoires de calibration (seeds 6100000 à 6100031) et 512 trajectoires de test distinctes (7100000 à 7100031), pour une cible de 80 %. La largeur moyenne agrège des variables exprimées ici à des échelles différentes ; les largeurs par variable montrent mieux les compromis.
@@ -85,6 +89,24 @@ Dans cet essai, la normalisation réduit fortement la largeur des deux première
   --checkpoint runs/joint-affine-pilot/control/latest.pt \
   --calibration-seed 6100000 --test-seed 7100000 --feature-scales 0.1 1 10 \
   --output runs/scaled-joint-calibration-study.json
+```
+
+Un autre tirage indépendant avec les mêmes échelles illustre l'intérêt du détail par variable. Il utilise 512 trajectoires de calibration (seeds 31000000 à 31000031) et 512 de test (32000000 à 32000031). Les couvertures par variable agrègent les douze horizons ; la couverture de trajectoire exige que les 36 coordonnées soient simultanément couvertes.
+
+| Modalités | Méthode jointe | Couverture globale par cible | Couvertures par variable | Couverture de trajectoire |
+| --- | --- | ---: | --- | ---: |
+| Séries seules | Sans normalisation | 97,79 % | 100 % ; 100 % ; 93,38 % | 79,30 % |
+| Séries seules | Par largeur | 97,20 % | 97,40 % ; 97,30 % ; 96,89 % | 76,37 % |
+| Trois modalités | Sans normalisation | 98,20 % | 100 % ; 100 % ; 94,60 % | 79,88 % |
+| Trois modalités | Par largeur | 97,10 % | 96,99 % ; 97,43 % ; 96,89 % | 75,59 % |
+
+La normalisation répartit davantage les couvertures dans cet essai, mais la couverture empirique de trajectoire est ici inférieure à la cible de 80 %. Il s'agit d'une seule expérience synthétique ; les 6 144 cibles par variable ne sont pas nécessairement indépendantes, puisqu'elles proviennent de 512 trajectoires. Les [mesures complètes](artifacts/quantile-diagnostics-study.json) contiennent les effectifs, scores par quantile, couvertures et empreinte du checkpoint. Reproduction :
+
+```bash
+.venv/bin/python tools/benchmark_joint_calibration.py \
+  --checkpoint runs/joint-affine-pilot/control/latest.pt \
+  --calibration-seed 31000000 --test-seed 32000000 --feature-scales 0.1 1 10 \
+  --output runs/quantile-diagnostics-study.json
 ```
 
 ## Comparaison simultanée sur données synthétiques

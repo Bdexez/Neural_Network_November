@@ -20,6 +20,8 @@ Les [statistiques temporelles](TEMPORAL_STATISTICS.md) ajoutent une projection o
 
 La [correction des prévisions courtes](FORECAST_REFINEMENT.md) ajuste une couche de 396 paramètres à partir des derniers pas de l'historique, en conservant les poids du modèle de base. Une porte facultative peut aussi l'activer pour les variables partiellement observées ; les mesures montrent des compromis selon la longueur d'historique.
 
+Une [tête de classification temporelle standardisée](SERIES_CLASSIFICATION.md) peut être ajustée séparément pour tester la résistance aux changements de niveau et d'unités. Elle produit des scores distincts et présente un compromis de précision sur les séries d'origine.
+
 La [prévision après changement de niveau ou d'unités](AFFINE_ROBUSTNESS.md) compare une augmentation affine et des caractéristiques relatives, avec un témoin ajusté sur les mêmes données.
 
 ## Démarrage

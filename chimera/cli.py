@@ -206,6 +206,13 @@ def main(argv=None):
     predict.add_argument("--series-set", help="Ensemble conforme de classes")
     predict.add_argument("--series-gate", help="Porte supervisée entre modèle et tête temporelle")
     predict.add_argument("--series-gate-guard", help="Protection calibrée de la porte")
+    embed = commands.add_parser("embed", help="Extraire les représentations contrastives des modalités")
+    embed.add_argument("--checkpoint", required=True)
+    embed.add_argument("--data", required=True)
+    embed.add_argument("--output", help="Fichier JSONL de vecteurs ; sinon stdout")
+    embed.add_argument("--batch-size", type=int, default=4)
+    embed.add_argument("--device", default="cpu")
+    embed.add_argument("--amp", choices=("none", "bf16", "fp16"), default="none")
     export = commands.add_parser("export", help="Exporter les poids sans l'optimiseur pour l'inférence")
     export.add_argument("--checkpoint", required=True)
     export.add_argument("--output", required=True)
@@ -512,6 +519,45 @@ def main(argv=None):
                 count += 1
         if args.output:
             print(f"{count} prédictions écrites dans {args.output}")
+    elif args.command == "embed":
+        if args.batch_size < 1:
+            parser.error("batch-size doit être >= 1")
+        if args.output and any(same_file(args.output, path) for path in (args.data, args.checkpoint)):
+            parser.error("Le fichier de vecteurs doit être distinct des fichiers d'entrée")
+        checkpoint_sha = file_sha256(args.checkpoint)
+        model, _ = load_checkpoint(args.checkpoint, args.device)
+        model.eval()
+        dataset = JointDataset(args.data, model.config)
+        if dataset.references_image(args.output):
+            parser.error("Le fichier de vecteurs doit être distinct des images d'entrée")
+        loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False, collate_fn=collate_records,
+                            generator=torch.Generator().manual_seed(0))
+        autocast = nullcontext() if args.amp == "none" else torch.autocast(
+            torch.device(args.device).type, dtype=torch.bfloat16 if args.amp == "bf16" else torch.float16)
+        count = 0
+        with prediction_stream(args.output) as stream, torch.inference_mode(), autocast:
+            for batch in loader:
+                inputs = {key: value.to(args.device) for key, value in batch.items()
+                          if key in ("input_ids", "attention_mask", "images", "series", "series_mask")}
+                vectors = {name: value.cpu().tolist() for name, value in model.encode_modalities(**inputs).items()}
+                size = len(next(iter(vectors.values())))
+                for offset in range(size):
+                    row = {"format_version": 1, "index": count,
+                           "checkpoint_sha256": checkpoint_sha, "dataset_sha256": dataset.fingerprint,
+                           "dataset_images_sha256": dataset.image_fingerprint,
+                           "alignment_text_view": model.config.alignment_text_view,
+                           "amp": args.amp, "device": str(args.device), "batch_size": args.batch_size,
+                           "torch_version": str(torch.__version__),
+                           "vectors": {name: value[offset] for name, value in vectors.items()}}
+                    stream.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n")
+                    count += 1
+            if file_sha256(args.checkpoint) != checkpoint_sha:
+                raise ValueError("Le checkpoint a changé pendant l'extraction")
+            verified = JointDataset(args.data, model.config)
+            if (verified.fingerprint, verified.image_fingerprint) != (dataset.fingerprint, dataset.image_fingerprint):
+                raise ValueError("Le jeu ou ses images ont changé pendant l'extraction")
+        if args.output:
+            print(f"{count} vecteurs écrits dans {args.output}")
     elif args.command == "export":
         if args.stable_rms_norm and same_file(args.output, args.checkpoint):
             parser.error("Le checkpoint stable doit être distinct du checkpoint source")

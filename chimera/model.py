@@ -176,6 +176,36 @@ class Chimera(nn.Module):
                 raise ValueError("Positions incohérentes dans le cache")
         return batch
 
+    def encode_modalities(self, *, input_ids=None, images=None, series=None, attention_mask=None, series_mask=None):
+        """Représentations contrastives indépendantes de chaque modalité fournie.
+
+        Le texte utilise toujours le contexte nul, même si l'alignement a été
+        entraîné en mode joint. Le mode train/eval et les gradients restent ceux
+        choisis par l'appelant.
+        """
+        self._validate(input_ids, images, series, attention_mask, series_mask, None)
+        representations = {}
+        if input_ids is not None:
+            valid = (torch.ones_like(input_ids, dtype=torch.bool)
+                     if attention_mask is None else attention_mask.bool())
+            representations['text'] = (2, self._isolated_text_representation(input_ids, valid))
+        if images is not None:
+            tokens, _ = self.vision(images)
+            representations['image'] = (0, tokens.mean(1))
+        if series is not None:
+            valid = (torch.ones(series.shape[:2], device=series.device, dtype=torch.bool)
+                     if series_mask is None else series_mask.bool())
+            tokens, mask, *_ = self.temporal(series, valid)
+            pooled = (tokens * mask.unsqueeze(-1)).sum(1) / mask.sum(1, keepdim=True).clamp_min(1)
+            representations['series'] = (1, pooled)
+        result = {}
+        for name, (index, value) in representations.items():
+            vector = F.normalize(self.alignment[index](value).float(), dim=-1)
+            if not torch.isfinite(vector).all():
+                raise FloatingPointError("Les représentations contrastives doivent être finies")
+            result[name] = vector
+        return result
+
     def _isolated_text_representation(self, input_ids, valid):
         """Encoder le texte avec le contexte nul, sans image ni série associée."""
         batch = input_ids.size(0)

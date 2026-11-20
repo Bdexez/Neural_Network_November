@@ -29,7 +29,7 @@ class OutputProtectionTests(unittest.TestCase):
             data.write_text(json.dumps(dict(image_path=image.name, class_label=1)))
             checkpoint = root / "model.pt"
             save_checkpoint(checkpoint, Chimera(ChimeraConfig.preset("tiny")))
-            for command in ("predict", "evaluate", "calibrate", "refine-forecast"):
+            for command in ("predict", "embed", "evaluate", "calibrate", "refine-forecast"):
                 for destination in (image, hardlink, symlink):
                     with self.subTest(command=command, destination=destination), self.assertRaises(SystemExit):
                         main(["--threads", "2", command, "--checkpoint", str(checkpoint), "--data", str(data),

@@ -187,6 +187,8 @@ L'alignement est non nul à 22 à 31 étapes sur 60 avec l'option, et à aucune 
 
 Le dossier de sortie doit être nouveau ; l'outil conserve les journaux et checkpoints de chaque variante et vérifie les seeds des sources et du test.
 
+Un second essai exploratoire reprend exactement les mêmes données et seeds avec un poids de 0,05. La recherche moyenne atteint 96,22 %, soit −2,86 points face au témoin, la classification 84,64 % et la MAE 0,19293. La baisse de recherche persiste sur la première seed ; les deux autres restent à 100 %. Les [mesures de ce second essai](artifacts/unpaired-class-alignment-weight005.json) utilisent le même test déjà observé : elles ne valident pas indépendamment ce choix de poids.
+
 Les lots répétés pour équilibrer les rangs peuvent présenter plusieurs vues de la même ligne. Les nouveaux entraînements avec `--mixed-modalities` transmettent l'indice stable de chaque ligne comme identité à la perte : les copies de cette ligne sont des positifs supplémentaires, plutôt que des négatifs dans l'alignement `paired`. `--alignment-duplicate-positives` active aussi ce comportement pour un jeu homogène ; l'option négative le désactive et les anciens checkpoints conservent leur réglage à la reprise. Les étiquettes de classe positives restent combinées aux identités lorsqu'elles sont activées. Ces répétitions affectent toujours les autres pertes et les poids des exemples ; les entrées augmentées sont supposées préserver leur correspondance.
 
 ## Vue textuelle isolée pour l'alignement

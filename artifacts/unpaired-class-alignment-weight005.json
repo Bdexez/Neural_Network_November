@@ -1,0 +1,155 @@
+{
+  "settings": {
+    "checkpoint": "/home/bdex/delivery/Neural_Network_November/runs/joint-affine-pilot/control/latest.pt",
+    "output_dir": "/home/bdex/delivery/Neural_Network_November/runs/unpaired-class-weight005",
+    "seeds": [
+      211000000,
+      213000000,
+      215000000
+    ],
+    "steps": 60,
+    "train_examples_per_modality": 48,
+    "batch_size": 4,
+    "text_seed": 210000000,
+    "series_seed": 210000001,
+    "test_seed": 220000000,
+    "test_batches": 8,
+    "test_batch_size": 32,
+    "lr": 0.0003,
+    "alignment_weight": 0.05
+  },
+  "parent_sha256": "2d2b6619ddf019a83f2458343b8665d091e62d1513507b9f7f8c97533e45fe43",
+  "train_data_sha256": "9fd46d4bb1c1f728ddce03d3ed94e5cc2758ae4a7b43ad9843c6b1da7f5043b2",
+  "torch_version": "2.15.0+cpu",
+  "runs": [
+    {
+      "seed": 211000000,
+      "mode": "control",
+      "step": 60,
+      "checkpoint_sha256": "5072d286eff1735d6e3427a7ac2bc948516860126f984ccbf70f238d18e1105e",
+      "elapsed_seconds": 5.214592154996353,
+      "exposure": {
+        "sample_views": 480,
+        "unique_examples_per_step_sum": 480
+      },
+      "nonzero_alignment_steps": 0,
+      "metrics": {
+        "examples": 256,
+        "text_to_series_class_top1": 0.97265625,
+        "series_class_accuracy": 0.87890625,
+        "series_forecast_mae": 0.19740229513910082
+      }
+    },
+    {
+      "seed": 211000000,
+      "mode": "class",
+      "step": 60,
+      "checkpoint_sha256": "e4075cb9aae6e09b7c45d6bdefbd2ea0e135c2788661b2ac6aface5e48709489",
+      "elapsed_seconds": 5.274110157988616,
+      "exposure": {
+        "sample_views": 480,
+        "unique_examples_per_step_sum": 480
+      },
+      "nonzero_alignment_steps": 31,
+      "metrics": {
+        "examples": 256,
+        "text_to_series_class_top1": 0.88671875,
+        "series_class_accuracy": 0.8671875,
+        "series_forecast_mae": 0.1931075784895155
+      }
+    },
+    {
+      "seed": 213000000,
+      "mode": "control",
+      "step": 60,
+      "checkpoint_sha256": "5147cf091b179d59e0a088b339fd611971aca833fe8008876615f72fbfb92837",
+      "elapsed_seconds": 5.406564428994898,
+      "exposure": {
+        "sample_views": 480,
+        "unique_examples_per_step_sum": 480
+      },
+      "nonzero_alignment_steps": 0,
+      "metrics": {
+        "examples": 256,
+        "text_to_series_class_top1": 1.0,
+        "series_class_accuracy": 0.84375,
+        "series_forecast_mae": 0.19891304936673906
+      }
+    },
+    {
+      "seed": 213000000,
+      "mode": "class",
+      "step": 60,
+      "checkpoint_sha256": "b4655af67b86d115055af435b212648ba2efd5e00c7687fd1f08cfb08b5d14eb",
+      "elapsed_seconds": 4.922884855986922,
+      "exposure": {
+        "sample_views": 480,
+        "unique_examples_per_step_sum": 480
+      },
+      "nonzero_alignment_steps": 22,
+      "metrics": {
+        "examples": 256,
+        "text_to_series_class_top1": 1.0,
+        "series_class_accuracy": 0.84375,
+        "series_forecast_mae": 0.20008429222636753
+      }
+    },
+    {
+      "seed": 215000000,
+      "mode": "control",
+      "step": 60,
+      "checkpoint_sha256": "70ce4058fd32f61535ee46212940f1f8de61d1346eec07df5a3818ea952c5318",
+      "elapsed_seconds": 5.337901136997971,
+      "exposure": {
+        "sample_views": 480,
+        "unique_examples_per_step_sum": 480
+      },
+      "nonzero_alignment_steps": 0,
+      "metrics": {
+        "examples": 256,
+        "text_to_series_class_top1": 1.0,
+        "series_class_accuracy": 0.828125,
+        "series_forecast_mae": 0.18913738595114815
+      }
+    },
+    {
+      "seed": 215000000,
+      "mode": "class",
+      "step": 60,
+      "checkpoint_sha256": "3fd403bdc98b8b05a2dfc966d261db19e24247897811b83ea7e41ca066f96d62",
+      "elapsed_seconds": 5.343818070992711,
+      "exposure": {
+        "sample_views": 480,
+        "unique_examples_per_step_sum": 480
+      },
+      "nonzero_alignment_steps": 22,
+      "metrics": {
+        "examples": 256,
+        "text_to_series_class_top1": 1.0,
+        "series_class_accuracy": 0.828125,
+        "series_forecast_mae": 0.1856117778354221
+      }
+    }
+  ],
+  "aggregate": {
+    "text_to_series_class_top1": {
+      "control_mean": 0.9908854166666666,
+      "class_mean": 0.9622395833333334,
+      "paired_difference_mean": -0.028645833333333332,
+      "paired_difference_std": 0.049616038758483465
+    },
+    "series_class_accuracy": {
+      "control_mean": 0.8502604166666666,
+      "class_mean": 0.8463541666666666,
+      "paired_difference_mean": -0.00390625,
+      "paired_difference_std": 0.0067658234670659265
+    },
+    "series_forecast_mae": {
+      "control_mean": 0.19515091015232935,
+      "class_mean": 0.1929345495171017,
+      "paired_difference_mean": -0.00221636063522763,
+      "paired_difference_std": 0.0029588469144220227
+    }
+  },
+  "scope": "Données synthétiques non appariées ; le texte indique la classe. L'indépendance vis-à-vis de l'entraînement du checkpoint parent n'est pas établie."
+}

@@ -259,6 +259,7 @@ def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=
             result["series_classifier_inverse_temperature"] = series_probability.inverse_temperature
         if series_set is not None:
             result.update(series_prediction_set_method=series_set.method,
+                          series_prediction_set_scope=series_set.scope,
                           series_prediction_set_nominal_coverage=series_set.coverage,
                           series_prediction_set_examples=set_examples,
                           series_prediction_set_labeled_examples=set_labeled,

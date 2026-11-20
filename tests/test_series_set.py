@@ -53,6 +53,63 @@ class SeriesSetTests(unittest.TestCase):
             self.assertLess(coverage, .95)
             self.assertTrue(mask.any(-1).all())
 
+    def test_class_conditional_simulation(self):
+        generator = torch.Generator().manual_seed(9012)
+        labels = (torch.rand(16000, generator=generator) < .12).long()
+        scores = torch.randn(16000, 2, generator=generator, dtype=torch.double)
+        scores[:, 0] += 1.5
+        probs = scores.softmax(-1)
+        calibration_scores = class_scores(probs[:4000], 'lac').gather(1, labels[:4000, None]).flatten()
+        groups = [calibration_scores[labels[:4000] == i] for i in range(2)]
+        fitted = SeriesPredictionSet(.9, 'lac', conformal_threshold(calibration_scores, .9), 4000, 2,
+                                     'none', 'a'*64, 'b'*64, None, None,
+                                     [conformal_threshold(group, .9) for group in groups],
+                                     [group.numel() for group in groups])
+        mask = fitted.predict(probs[4000:])
+        hits = mask.gather(1, labels[4000:, None]).flatten()
+        for class_id in range(2):
+            observed = hits[labels[4000:] == class_id].double().mean().item()
+            self.assertGreater(observed, .86)
+            self.assertLess(observed, .95)
+
+    def test_class_conditional_thresholds_and_rare_class(self):
+        class StubModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.anchor = torch.nn.Parameter(torch.zeros(()))
+                self.config = replace(ChimeraConfig.preset('tiny'), num_classes=2, series_features=2)
+        class StubHead:
+            num_classes, amp = 2, 'none'
+            checkpoint_sha256, dataset_sha256 = 'a'*64, 'b'*64
+            def validate(self, config, *, amp=None):
+                pass
+            def scores(self, model, batch):
+                return batch['series'][:, 0]
+        model, head = StubModel().train(), StubHead()
+        scores = torch.tensor([[2.2, 0.]] * 185 + [[2.2, 0.]] * 15)
+        labels = torch.tensor([0] * 185 + [1] * 15)
+        batch = dict(series=scores[:, None], class_labels=labels)
+        kwargs = dict(checkpoint_sha256='a'*64, classifier_sha256='c'*64,
+                      dataset_sha256='d'*64, method='lac')
+        marginal = fit_series_set(model, head, [batch], **kwargs)
+        conditional = fit_series_set(model, head, [batch], scope='class', **kwargs)
+        self.assertEqual(conditional.class_examples, [185, 15])
+        self.assertEqual(conditional.scope, 'class')
+        self.assertGreater(conditional.class_thresholds[1], conditional.class_thresholds[0])
+        probs = scores.double().softmax(-1)
+        self.assertFalse(marginal.predict(probs)[-1, 1])
+        self.assertTrue(conditional.predict(probs)[-1, 1])
+        self.assertEqual(SeriesPredictionSet.from_dict(conditional.to_dict()), conditional)
+        legacy = marginal.to_dict()
+        del legacy['class_examples'], legacy['class_thresholds']
+        self.assertEqual(SeriesPredictionSet.from_dict(legacy).scope, 'marginal')
+        with self.assertRaisesRegex(ValueError, 'classe 1'):
+            fit_series_set(model, head, [dict(series=scores[:193, None], class_labels=labels[:193])],
+                           scope='class', **kwargs)
+        with self.assertRaises(ValueError):
+            SeriesPredictionSet.from_dict(dict(conditional.to_dict(), class_examples=[192, 8]))
+        self.assertTrue(model.training)
+
     def test_fit_state_and_batching(self):
         config = ChimeraConfig.preset('tiny')
         model = Chimera(config).train()
@@ -127,6 +184,16 @@ class SeriesSetTests(unittest.TestCase):
                   '--data',str(calib),'--method','lac','--output',str(sets)])
             main(['evaluate',*common,'--series-set',str(sets),'--output',str(report)])
             self.assertEqual(json.loads(report.read_text())['series_prediction_set_method'],'lac')
+            main(['calibrate-series-set','--checkpoint',str(checkpoint),'--series-classifier',str(head),
+                  '--data',str(calib),'--method','lac','--scope','class','--coverage','0.8','--output',str(sets)])
+            self.assertEqual(SeriesPredictionSet.load(sets).scope, 'class')
+            main(['evaluate',*common,'--series-set',str(sets),'--output',str(report)])
+            self.assertEqual(json.loads(report.read_text())['series_prediction_set_scope'], 'class')
+            saved = sets.read_bytes()
+            with self.assertRaisesRegex(ValueError, 'classe'):
+                main(['calibrate-series-set','--checkpoint',str(checkpoint),'--series-classifier',str(head),
+                      '--data',str(calib),'--scope','class','--coverage','0.95','--output',str(sets)])
+            self.assertEqual(sets.read_bytes(),saved)
 
 
     def test_benchmark_seed_ranges_and_checkpoint_protection(self):

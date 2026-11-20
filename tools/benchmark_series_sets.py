@@ -38,6 +38,7 @@ def main():
     parser.add_argument("--set-seed", type=int, default=62000000)
     parser.add_argument("--set-mask-seed", type=int, default=63000000)
     parser.add_argument("--coverage", type=float, default=.9)
+    parser.add_argument("--scope", choices=("marginal", "class"), default="marginal")
     parser.add_argument("--test-seed", type=int, default=64000000)
     parser.add_argument("--test-mask-seed", type=int, default=65000000)
     parser.add_argument("--shape-context", type=int, default=16)
@@ -93,7 +94,7 @@ def main():
                                 batches(args.set_batches, args.set_seed, args.set_mask_seed, augment=True),
                                 checkpoint_sha256=checkpoint_sha, classifier_sha256=classifier_sha,
                                 probability=probability, probability_sha256=probability_sha,
-                                method=method, coverage=args.coverage)
+                                method=method, coverage=args.coverage, scope=args.scope)
         sets[method] = fitted.to_dict()
         measurements[method] = {}
         for label, shift in (("identity", 0.), ("shift20", 20.)):

@@ -51,6 +51,12 @@ class SeriesPredictionSet:
     classifier_sha256: str
     probability_sha256: str | None
     dataset_sha256: str | None
+    class_thresholds: list[float] | None = None
+    class_examples: list[int] | None = None
+
+    @property
+    def scope(self):
+        return "class" if self.class_thresholds is not None else "marginal"
 
     def __post_init__(self):
         if not math.isfinite(self.coverage) or not 0 < self.coverage < 1:
@@ -61,6 +67,17 @@ class SeriesPredictionSet:
             raise ValueError("Nombre d'exemples insuffisant pour cette couverture")
         if type(self.num_classes) is not int or self.num_classes < 2 or self.amp not in ("none", "bf16", "fp16"):
             raise ValueError("Classes ou précision invalides")
+        if (self.class_thresholds is None) != (self.class_examples is None):
+            raise ValueError("Seuils et effectifs par classe requis ensemble")
+        if self.class_thresholds is not None:
+            if not isinstance(self.class_thresholds, list) or not isinstance(self.class_examples, list):
+                raise ValueError("Seuils et effectifs par classe doivent être des listes")
+            if (len(self.class_thresholds) != self.num_classes or len(self.class_examples) != self.num_classes
+                    or any(type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 1
+                           for value in self.class_thresholds)
+                    or any(type(n) is not int or n < 1 or math.ceil((n + 1) * self.coverage) > n
+                           for n in self.class_examples) or sum(self.class_examples) != self.examples):
+                raise ValueError("Seuils ou effectifs par classe invalides")
         for digest in (self.checkpoint_sha256, self.classifier_sha256, self.probability_sha256, self.dataset_sha256):
             if digest is not None and (not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest)):
                 raise ValueError("Empreinte SHA-256 invalide")
@@ -84,7 +101,9 @@ class SeriesPredictionSet:
     def predict(self, probabilities, top_indices=None):
         if probabilities.ndim != 2 or probabilities.size(-1) != self.num_classes:
             raise ValueError("Nombre de classes incompatible")
-        mask = class_scores(probabilities, self.method) <= self.threshold
+        thresholds = (probabilities.new_tensor(self.class_thresholds, dtype=torch.float64)
+                      if self.class_thresholds is not None else self.threshold)
+        mask = class_scores(probabilities, self.method) <= thresholds
         top = probabilities.argmax(-1) if top_indices is None else top_indices
         if top.ndim != 1 or top.size(0) != probabilities.size(0) or top.dtype != torch.long or ((top < 0) | (top >= self.num_classes)).any():
             raise ValueError("Indices de classes invalides")
@@ -107,9 +126,9 @@ class SeriesPredictionSet:
 
 def fit_series_set(model, classifier, batches, *, checkpoint_sha256, classifier_sha256,
                    probability=None, probability_sha256=None, dataset_sha256=None,
-                   coverage=.9, method="aps", amp="none"):
-    if amp not in ("none", "bf16", "fp16") or method not in ("lac", "aps"):
-        raise ValueError("Précision ou méthode invalide")
+                   coverage=.9, method="aps", scope="marginal", amp="none"):
+    if amp not in ("none", "bf16", "fp16") or method not in ("lac", "aps") or scope not in ("marginal", "class"):
+        raise ValueError("Précision, méthode ou portée invalide")
     if not math.isfinite(coverage) or not 0 < coverage < 1:
         raise ValueError("Couverture invalide")
     classifier.validate(model.config, amp=amp)
@@ -126,7 +145,7 @@ def fit_series_set(model, classifier, batches, *, checkpoint_sha256, classifier_
         lambda: torch.autocast(device.type, dtype=torch.bfloat16 if amp == "bf16" else torch.float16))
     was_training = model.training
     model.eval()
-    values = []
+    values, labels = [], []
     try:
         with torch.inference_mode():
             for batch in batches:
@@ -146,11 +165,24 @@ def fit_series_set(model, classifier, batches, *, checkpoint_sha256, classifier_
                     scores = classifier.scores(model, batch)[observed]
                 probs = probability.probabilities(scores) if probability else log_probabilities(scores).exp()
                 values.append(class_scores(probs, method).gather(1, target[observed, None]).flatten().cpu())
+                labels.append(target[observed].cpu())
         if not values:
             raise ValueError("La calibration nécessite des exemples étiquetés")
         scores = torch.cat(values)
         threshold = conformal_threshold(scores, coverage)
+        class_thresholds = class_examples = None
+        if scope == "class":
+            targets = torch.cat(labels)
+            class_thresholds, class_examples = [], []
+            for class_id in range(model.config.num_classes):
+                selected = scores[targets == class_id]
+                try:
+                    class_thresholds.append(conformal_threshold(selected, coverage))
+                except ValueError as error:
+                    raise ValueError(f"Exemples insuffisants pour la classe {class_id}") from error
+                class_examples.append(selected.numel())
         return SeriesPredictionSet(coverage, method, threshold, scores.numel(), model.config.num_classes,
-                                   amp, checkpoint_sha256, classifier_sha256, probability_sha256, dataset_sha256)
+                                   amp, checkpoint_sha256, classifier_sha256, probability_sha256, dataset_sha256,
+                                   class_thresholds, class_examples)
     finally:
         model.train(was_training)

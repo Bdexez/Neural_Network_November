@@ -170,3 +170,25 @@ Dans cet essai, la couverture par classe varie de 77,87 % à 100 % pour LAC et d
 .venv/bin/python tools/benchmark_series_sets.py \
   --checkpoint runs/joint-affine-pilot/control/latest.pt --output runs/series-set-study.json
 ```
+
+### Calibration par classe
+
+Pour chercher une couverture conditionnelle à la vraie classe, ajouter `--scope class` à `calibrate-series-set`. La commande calcule un seuil distinct à partir des seuls exemples de calibration de chaque classe ; les seuils et effectifs sont stockés dans l'artefact. Chaque classe doit disposer d'assez d'exemples pour le rang conforme demandé : à 90 %, il en faut au moins neuf par classe, sinon la commande échoue sans remplacer la sortie existante. Le mode par défaut, `--scope marginal`, reste compatible avec les artefacts précédents.
+
+Pour un prédicteur, une méthode et un niveau fixés avant calibration, et des données échangeables dans chaque classe, cette construction offre une couverture marginale conditionnelle à la classe, sur la répétition des tirages. Elle ne garantit pas la couverture pour chaque individu ni pour un artefact de calibration particulier. Cette distinction et le coût de l'ajustement par classe sont discutés par [Ding et al.](https://arxiv.org/abs/2306.09335). Une classe rare peut rendre le calibrage difficile ou imposer des ensembles plus grands.
+
+Sur les mêmes données synthétiques appariées que l'essai précédent, avec 150 à 189 exemples de calibration par classe, les résultats sont les suivants :
+
+| Méthode | Portée | Couverture globale | Taille moyenne | Couvertures par classe |
+| --- | --- | ---: | ---: | --- |
+| LAC | Marginale | 88,13 % | 2,32 | 100,0 %, 77,9 %, 79,3 %, 87,4 %, 91,1 %, 93,0 % |
+| LAC | Par classe | 89,06 % | 2,46 | 95,2 %, 89,9 %, 83,2 %, 86,4 %, 90,3 %, 89,0 % |
+| Cumulatif | Marginale | 93,02 % | 3,08 | 100,0 %, 86,6 %, 88,0 %, 94,4 %, 94,9 %, 94,6 % |
+| Cumulatif | Par classe | 92,24 % | 2,97 | 100,0 %, 88,2 %, 87,1 %, 91,7 %, 91,1 %, 95,2 % |
+
+Les résultats par classe ne sont pas tous supérieurs à 90 % dans ce tirage : les limites du protocole synthétique et de l'échangeabilité indiquées ci-dessus restent applicables. Les [résultats détaillés](artifacts/series-class-set-study.json) conservent les seuils et les comptes.
+
+```bash
+.venv/bin/python tools/benchmark_series_sets.py --scope class \
+  --checkpoint runs/joint-affine-pilot/control/latest.pt --output runs/series-class-set-study.json
+```

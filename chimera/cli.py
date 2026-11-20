@@ -204,6 +204,7 @@ def main(argv=None):
     set_fit.add_argument("--output", required=True)
     set_fit.add_argument("--coverage", type=float, default=.9)
     set_fit.add_argument("--method", choices=("lac", "aps"), default="aps")
+    set_fit.add_argument("--scope", choices=("marginal", "class"), default="marginal")
     set_fit.add_argument("--batch-size", type=int, default=32)
     set_fit.add_argument("--device", default="cpu")
     set_fit.add_argument("--amp", choices=("none", "bf16", "fp16"), default="none")
@@ -396,6 +397,7 @@ def main(argv=None):
                         row["series_prediction_set"] = mask.nonzero().flatten().tolist()
                         row["series_prediction_set_nominal_coverage"] = series_set.coverage
                         row["series_prediction_set_method"] = series_set.method
+                        row["series_prediction_set_scope"] = series_set.scope
                 if calibration is not None:
                     row["calibrated_interval"] = calibration.interval(output.forecast)[0].tolist()
                     row["calibrated_nominal_coverage"] = calibration.coverage
@@ -467,14 +469,15 @@ def main(argv=None):
         loader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=collate_records,
                             generator=torch.Generator().manual_seed(0))
         fitted = fit_series_set(model, classifier, loader, amp=args.amp, coverage=args.coverage,
-                                method=args.method, checkpoint_sha256=file_sha256(args.checkpoint),
+                                method=args.method, scope=args.scope, checkpoint_sha256=file_sha256(args.checkpoint),
                                 classifier_sha256=file_sha256(args.series_classifier), probability=probability,
                                 probability_sha256=file_sha256(args.series_probability) if probability else None,
                                 dataset_sha256=dataset.fingerprint)
         fitted.validate_files(args.checkpoint, args.series_classifier, args.series_probability)
         with prediction_stream(args.output) as stream:
             stream.write(json.dumps(fitted.to_dict(), indent=2, allow_nan=False) + "\n")
-        print(json.dumps(dict(output=args.output, examples=fitted.examples, threshold=fitted.threshold)))
+        print(json.dumps(dict(output=args.output, examples=fitted.examples, threshold=fitted.threshold,
+                              scope=fitted.scope, class_thresholds=fitted.class_thresholds)))
     elif args.command == "calibrate-series-probability":
         if args.batch_size < 1:
             parser.error("batch-size doit être > 0")

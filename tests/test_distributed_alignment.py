@@ -67,6 +67,13 @@ def alignment_worker(rank, init_file, directory, scenario):
             vectors = {key:value[:,:2] for key,value in vectors.items()}
         if scenario == 'mismatched_dtype' and rank == 1:
             vectors = {key:value.double() for key,value in vectors.items()}
+        if scenario == 'invalid_sample' and rank == 1:
+            vectors = {0: left[0, 0]}
+        if scenario == 'invalid_vector_shape' and rank == 1:
+            vectors = {0: left, 1: right[:, :2]}
+        if scenario == 'invalid_labels' and rank == 1:
+            labels = torch.zeros(1, 1, dtype=torch.long)
+        sample_ids = torch.tensor([-2]) if scenario == 'invalid_ids' and rank == 1 else None
         if scenario == 'mismatched_temperature':
             temperature = .4 if rank == 1 else .3
         else:
@@ -82,7 +89,7 @@ def alignment_worker(rank, init_file, directory, scenario):
             cross_class = 1
         try:
             loss = distributed_alignment_loss(vectors, labels, temperature, mode, group=dist.group.WORLD,
-                                              text_view=text_view,
+                                              text_view=text_view, sample_ids=sample_ids,
                                               cross_rank_views=cross_rank, cross_class_views=cross_class)
         except ValueError as exc:
             torch.save(dict(error=str(exc)), Path(directory) / f'{rank}.pt')
@@ -227,6 +234,15 @@ class DistributedAlignmentTests(unittest.TestCase):
         for scenario in ('all_invalid_mode', 'all_invalid_view', 'all_invalid_temperature'):
             for result in self.run_workers(scenario):
                 self.assertIn('température d\'alignement invalide', result['error'])
+
+    def test_invalid_local_tensors_are_rejected_on_all_ranks(self):
+        for scenario, message in (('invalid_sample', 'forme [B, D]'),
+                                  ('invalid_vector_shape', 'partager forme'),
+                                  ('invalid_labels', 'class_labels'), ('invalid_ids', 'sample_ids')):
+            with self.subTest(scenario=scenario):
+                for result in self.run_workers(scenario):
+                    self.assertIn('Rang 1', result['error'])
+                    self.assertIn(message, result['error'])
 
     def test_model_synchronizes_class_option_validation(self):
         for scenario, message in (('mismatched_cross_class_views_paired', 'différents selon les rangs'),

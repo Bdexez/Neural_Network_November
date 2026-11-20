@@ -78,18 +78,20 @@ def distributed_alignment_loss(vectors, class_labels, temperature, mode, *, grou
     if not vectors or any(key not in (0, 1, 2) for key in vectors):
         raise ValueError("Au moins une modalité connue est requise")
     sample = next(iter(vectors.values()))
-    if sample.ndim != 2 or not sample.is_floating_point() or sample.size(0) < 1:
-        raise ValueError("Les représentations doivent avoir la forme [B, D]")
-    batch, dim = sample.shape
-    if any(value.shape != sample.shape or value.device != sample.device or value.dtype != sample.dtype
-           for value in vectors.values()):
-        raise ValueError("Les représentations doivent partager forme, dtype et device")
-    if class_labels is not None and (class_labels.shape != (batch,) or class_labels.dtype != torch.long
-                                     or class_labels.device != sample.device):
-        raise ValueError("class_labels doit avoir la forme [B] et le même device")
-    if sample_ids is not None and (sample_ids.shape != (batch,) or sample_ids.dtype != torch.long
-                                   or sample_ids.device != sample.device or (sample_ids < -1).any()):
-        raise ValueError("sample_ids doit être long [B], avec -1 pour les identités inconnues")
+    batch = sample.size(0) if sample.ndim >= 1 else 0
+    dim = sample.size(1) if sample.ndim >= 2 else 0
+    input_error = 0
+    if sample.ndim != 2 or not sample.is_floating_point() or batch < 1:
+        input_error = 1
+    elif any(value.shape != sample.shape or value.device != sample.device or value.dtype != sample.dtype
+             for value in vectors.values()):
+        input_error = 2
+    elif class_labels is not None and (class_labels.shape != (batch,) or class_labels.dtype != torch.long
+                                       or class_labels.device != sample.device):
+        input_error = 3
+    elif sample_ids is not None and (sample_ids.shape != (batch,) or sample_ids.dtype != torch.long
+                                     or sample_ids.device != sample.device or (sample_ids < -1).any()):
+        input_error = 4
     dtype_codes = {torch.float16: 1, torch.bfloat16: 2, torch.float32: 3, torch.float64: 4}
     dtype_code = dtype_codes.get(sample.dtype, 0)
     mode_code = {"paired": 0, "class": 1}.get(mode, -1) if isinstance(mode, str) else -1
@@ -104,13 +106,20 @@ def distributed_alignment_loss(vectors, class_labels, temperature, mode, *, grou
     cross_class_code = int(cross_class_views) if type(cross_class_views) is bool else -1
     specification = torch.tensor([batch, dim, dtype_code, mode_code,
                                   view_code, temperature_bits, cross_rank_code,
-                                  cross_class_code],
+                                  cross_class_code, input_error],
                                  dtype=torch.long, device=sample.device)
     specifications = [torch.empty_like(specification) for _ in range(world)]
     dist.all_gather(specifications, specification, group=group)
     # Détecter les désaccords avant les collectives dont les tailles doivent coïncider.
     rows = [value.tolist() for value in specifications]
-    if any(row[1:] != rows[0][1:] for row in rows[1:]):
+    errors = ("", "Les représentations doivent avoir la forme [B, D]",
+              "Les représentations doivent partager forme, dtype et device",
+              "class_labels doit avoir la forme [B] et le même device",
+              "sample_ids doit être long [B], avec -1 pour les identités inconnues")
+    for rank, row in enumerate(rows):
+        if row[-1]:
+            raise ValueError(f"Rang {rank} : {errors[row[-1]]}")
+    if any(row[1:-1] != rows[0][1:-1] for row in rows[1:]):
         raise ValueError("Dimensions, dtype ou paramètres d'alignement différents selon les rangs")
     if not dtype_code:
         raise ValueError("Dtype de représentation non pris en charge")

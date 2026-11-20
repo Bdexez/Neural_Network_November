@@ -44,6 +44,48 @@ La prédiction conserve `class_id`, `class_probabilities` et `forecast` du modè
 
 La taille des statistiques ridge croît quadratiquement avec le nombre d'entrées. Le calcul des caractéristiques de forme parcourt chaque historique ; son coût dépend de la longueur des séries et du matériel.
 
+## Calibration des probabilités
+
+Une température facultative transforme les scores de la tête en probabilités par `softmax(score × température_inverse)`. Elle est ajustée sur un jeu étiqueté réservé en minimisant la log-vraisemblance négative (NLL), selon le principe de [temperature scaling de Guo et al.](https://proceedings.mlr.press/v70/guo17a.html). La recherche est déterministe et bornée à une température inverse entre `1e-4` et `1e4`. Une valeur strictement positive conserve l'ordre des scores, sauf égalités dues à la précision numérique ; l'identifiant de classe publié reste calculé directement sur les scores d'origine.
+
+Le fichier de calibration est distinct de la tête et lié aux SHA-256 exacts du checkpoint et de la tête, ainsi qu'à leur précision AMP. Lorsque l'empreinte d'ajustement est disponible, la commande refuse un fichier de calibration dont les octets JSONL sont identiques au jeu d'ajustement de la tête ; des fichiers différents peuvent toutefois partager des exemples. Utiliser des jeux distincts pour ajuster la tête, calibrer la température et tester les probabilités. Les lignes sans étiquette sont ignorées ; au moins une étiquette observée est nécessaire.
+
+L'ajustement ne conserve pas les historiques, mais stocke les scores des exemples étiquetés pour chercher la température : sa mémoire croît avec le produit du nombre d'exemples et du nombre de classes.
+
+```bash
+.venv/bin/python -m chimera calibrate-series-probability \
+  --checkpoint runs/joint-affine-pilot/control/latest.pt \
+  --series-classifier runs/series-classifier.json --data data/series-probability-calibration.jsonl \
+  --output runs/series-probability.json
+
+.venv/bin/python -m chimera evaluate \
+  --checkpoint runs/joint-affine-pilot/control/latest.pt --data data/series-head-test.jsonl \
+  --series-classifier runs/series-classifier.json --series-probability runs/series-probability.json \
+  --output runs/series-probability-evaluation.json
+```
+
+Avec les deux fichiers, `predict` ajoute `series_classifier_probabilities` et la température inverse tout en conservant les scores et la classe précédents. `evaluate` compare les probabilités `softmax` avant et après calibration : NLL, score de Brier multiclasse (somme des carrés sur les classes) et erreur de calibration des confiances maximales (ECE) sur quinze intervalles de largeur égale. Le rapport contient les effectifs, accuracies et confiances moyennes par intervalle. `series_probability_data_reused` vaut `true` pour le même JSONL de calibration et `null` sinon.
+
+Ces indicateurs sont empiriques. L'ECE dépend du découpage et de l'effectif ; ni une faible ECE ni une baisse de NLL ne garantit la calibration par classe ou sur une distribution différente. Le réglage de température améliore au mieux la NLL du jeu utilisé pour l'ajuster, pas nécessairement celle du test.
+
+### Essai synthétique indépendant
+
+Un essai utilise le checkpoint `tiny` du contrôle joint-affine : 3 072 exemples pour la tête avec caractéristiques de forme, 1 024 autres pour la température et 2 048 pour le test. Les historiques alternent 8, 16 et 32 pas. Un masquage de 30 % des valeurs touche environ la moitié des exemples dans chaque jeu, avec des seeds distinctes. Les scores sont identiques pour les deux transformations appariées testées ici.
+
+| Test | Probabilités | Accuracy | NLL | Brier | ECE, 15 intervalles |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Identité | Softmax des scores bruts | 56,59 % | 1,5528 | 0,7449 | 0,3318 |
+| Identité | Température ajustée | 56,59 % | 1,1066 | 0,5745 | 0,0616 |
+| Décalage +20 | Softmax des scores bruts | 56,59 % | 1,5528 | 0,7449 | 0,3318 |
+| Décalage +20 | Température ajustée | 56,59 % | 1,1066 | 0,5745 | 0,0616 |
+
+La température inverse ajustée vaut environ 5,86. Cet essai utilise un seul checkpoint et des données synthétiques : il ne valide pas les probabilités sur des données réelles ni en cas de changement de distribution. Les [résultats complets](artifacts/series-probability-study.json) comprennent les intervalles de fiabilité, seeds et empreintes.
+
+```bash
+.venv/bin/python tools/benchmark_series_probability.py \
+  --checkpoint runs/joint-affine-pilot/control/latest.pt --output runs/series-probability-study.json
+```
+
 ## Comparaison synthétique indépendante
 
 Le checkpoint `tiny` du contrôle joint-affine est fixé après 180 étapes. La tête est ajustée par ridge sur 3 072 exemples de séries seulement, en alternant des historiques de 8, 16 et 32 pas. Les 512 exemples de test par condition utilisent d'autres seeds ; les transformations et masques d'une même ligne sont appariés. Les observations manquantes sont masquées indépendamment des valeurs ; l'ajustement ne comportait pas ces masques.

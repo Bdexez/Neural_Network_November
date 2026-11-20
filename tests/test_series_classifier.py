@@ -11,6 +11,7 @@ import unittest
 import torch
 
 from chimera import Chimera, ChimeraConfig
+from chimera.augmentation import SeriesAugmentation
 from chimera.cli import main
 from chimera.data import synthetic_batch
 from chimera.evaluation import evaluate
@@ -48,6 +49,62 @@ class SeriesClassifierTests(unittest.TestCase):
         torch.testing.assert_close(before, other, rtol=2e-5, atol=2e-6)
         with self.assertRaisesRegex(ValueError, "uniquement"):
             normalized_temporal_features(model, dict(series=series, images=batch["images"]), 1e-4)
+
+    def test_shape_features_have_expected_values_and_ignore_missing_positions(self):
+        model = Chimera(self.config).eval()
+        series = torch.tensor([[[1., 2., float("nan")], [3., 4., float("nan")]]], dtype=torch.float64)
+        with torch.inference_mode():
+            base = normalized_temporal_features(model, dict(series=series), 1e-4)
+            expanded = normalized_temporal_features(model, dict(series=series), 1e-4, shape_context=2)
+            transformed = normalized_temporal_features(model, dict(series=series * 3 + 20), 1e-4, shape_context=2)
+            padded = torch.nn.functional.pad(series, (0, 0, 2, 3), value=1e5)
+            mask = torch.tensor([[0, 0, 1, 1, 0, 0, 0]], dtype=torch.bool)
+            padding_result = normalized_temporal_features(model, dict(series=padded, series_mask=mask), 1e-4, 2)
+        torch.testing.assert_close(expanded[:, :self.config.d_model], base.double(), rtol=0, atol=0)
+        torch.testing.assert_close(expanded, transformed, rtol=2e-5, atol=2e-6)
+        torch.testing.assert_close(expanded, padding_result, rtol=2e-5, atol=2e-6)
+        extra = expanded[0, self.config.d_model:]
+        expected = torch.tensor([-1., 1., -1., 1., 0., 0., 1., 1., 1., 1., 0., 0.,
+                                 2., 2., 0., 4., 4., 0., -1., -1., 0.] + [0.] * 18, dtype=torch.float64)
+        torch.testing.assert_close(extra, expected, rtol=0, atol=0)
+
+    def test_augmented_shape_fit_is_deterministic_and_versioned(self):
+        model = Chimera(self.config).train()
+        batch = synthetic_batch(self.config, batch_size=96, seed=498)
+        batch = {key: value for key, value in batch.items() if key in ("series", "series_mask", "class_labels")}
+        augmentation = SeriesAugmentation(missing_rate=.3, mask_probability=.5)
+        rng = torch.get_rng_state().clone()
+        first = fit_series_classifier(model, [batch], shape_context=8, augmentation=augmentation, augmentation_seed=42)
+        second = fit_series_classifier(model, [batch], shape_context=8, augmentation=augmentation, augmentation_seed=42)
+        changed = fit_series_classifier(model, [batch], shape_context=8, augmentation=augmentation, augmentation_seed=43)
+        self.assertTrue(model.training)
+        torch.testing.assert_close(torch.get_rng_state(), rng, rtol=0, atol=0)
+        self.assertEqual(first.weight.shape, (self.config.d_model + 3 * (2 * 8 + 9), self.config.num_classes))
+        torch.testing.assert_close(first.weight, second.weight, rtol=0, atol=0)
+        self.assertFalse(torch.equal(first.weight, changed.weight))
+        payload = first.to_dict()
+        self.assertEqual(payload["format_version"], 2)
+        self.assertEqual(payload["augmentation_seed"], 42)
+        self.assertEqual(payload["augmentation"]["missing_rate"], .3)
+        loaded = SeriesClassifier.from_dict(json.loads(json.dumps(payload)))
+        self.assertEqual(loaded.shape_context, 8)
+        augmented_only = fit_series_classifier(model, [batch], augmentation=augmentation, augmentation_seed=42)
+        self.assertEqual(augmented_only.to_dict()["format_version"], 2)
+        self.assertEqual(SeriesClassifier.from_dict(augmented_only.to_dict()).shape_context, 0)
+        model.eval()
+        with torch.inference_mode():
+            original = loaded.scores(model, batch)
+            transformed = dict(batch, series=batch["series"].double() * 4 - 20)
+            torch.testing.assert_close(original, loaded.scores(model, transformed), rtol=3e-5, atol=3e-6)
+        for corrupted in (dict(payload, format_version=1), dict(payload, shape_context=-1),
+                          dict(payload, augmentation={"unknown": 1}), dict(payload, augmentation_seed=None),
+                          dict(payload, augmentation_batch_size=0), dict(payload, augmentation_device="")):
+            with self.subTest(corrupted=corrupted), self.assertRaises(ValueError):
+                SeriesClassifier.from_dict(corrupted)
+        with self.assertRaises(ValueError):
+            fit_series_classifier(model, [batch], shape_context=self.config.max_series_len + 1)
+        with self.assertRaisesRegex(ValueError, "taille des lots"):
+            fit_series_classifier(model, [batch], augmentation=augmentation, augmentation_batch_size=10)
 
     def test_fit_is_batch_invariant_restores_mode_and_rejects_missing_class(self):
         model = Chimera(self.config).train()
@@ -148,6 +205,17 @@ class SeriesClassifierTests(unittest.TestCase):
             self.assertEqual(metrics["series_classifier_examples"], 12)
             self.assertIsNone(metrics["series_classifier_data_reused"])
             self.assertEqual(sum(row["count"] for row in metrics["series_classifier_confusion"]), 12)
+            shaped_path = root / "shape-head.json"
+            main(["--threads", "2", "refine-series-classifier", "--checkpoint", str(checkpoint),
+                  "--data", str(data), "--output", str(shaped_path), "--shape-context", "4",
+                  "--missing-rate", ".3", "--mask-probability", ".5", "--augmentation-seed", "77"])
+            shaped = SeriesClassifier.load(shaped_path)
+            self.assertEqual(shaped.shape_context, 4)
+            self.assertEqual(shaped.augmentation_seed, 77)
+            self.assertEqual(shaped.augmentation_batch_size, 32)
+            self.assertEqual(shaped.augmentation_device, "cpu")
+            main(["evaluate", *common, "--series-classifier", str(shaped_path), "--output", str(report)])
+            self.assertEqual(json.loads(report.read_text())["series_classifier_examples"], 12)
             main(["evaluate", "--checkpoint", str(checkpoint), "--data", str(data),
                   "--series-classifier", str(classifier), "--output", str(report)])
             self.assertTrue(json.loads(report.read_text())["series_classifier_data_reused"])
@@ -184,16 +252,21 @@ class SeriesClassifierTests(unittest.TestCase):
             save_checkpoint(checkpoint, Chimera(self.config))
             before = checkpoint.read_bytes()
             common = [sys.executable, "tools/benchmark_series_classifier.py", "--checkpoint", str(checkpoint),
-                      "--train-batches", "12", "--test-batches", "1", "--batch-size", "16"]
+                      "--train-batches", "12", "--test-batches", "1", "--batch-size", "16",
+                      "--shape-context", "4", "--train-missing-rate", ".3"]
             run = subprocess.run([*common, "--output", str(report)], capture_output=True, text=True, timeout=60)
             self.assertEqual(run.returncode, 0, run.stderr)
             result = json.loads(report.read_text())
             self.assertEqual(sum(result["classifier"]["class_counts"]), 192)
             self.assertEqual(result["measurements"]["history8"]["identity"]["examples"], 16)
             self.assertEqual(result["measurements"]["history8"]["identity"]["changed_from_identity"], 0)
+            self.assertEqual(result["measurements"]["history8"]["identity"]["shape_changed_from_identity"], 0)
+            self.assertEqual(result["shape_classifier"]["shape_context"], 4)
+            self.assertEqual(result["classifier"]["augmentation"], result["shape_classifier"]["augmentation"])
             self.assertGreaterEqual(result["measurements"]["history8"]["shift20"]["max_score_difference"], 0)
             for args in (("--test-seed", "43000001", "--output", str(report)),
                          ("--mask-seed", "43000001", "--output", str(report)),
+                         ("--train-mask-seed", "43000001", "--output", str(report)),
                          ("--output", str(checkpoint))):
                 run = subprocess.run([*common, *args], capture_output=True, text=True, timeout=60)
                 self.assertNotEqual(run.returncode, 0)

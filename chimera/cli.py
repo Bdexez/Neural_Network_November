@@ -10,6 +10,7 @@ import tempfile
 import torch
 from torch.utils.data import DataLoader
 
+from .augmentation import SeriesAugmentation
 from .calibration import ForecastCalibration, file_sha256, fit_calibration
 from .config import ChimeraConfig
 from .data import JointDataset, collate_records, synthetic_batch
@@ -195,6 +196,10 @@ def main(argv=None):
     series_fit.add_argument("--output", required=True)
     series_fit.add_argument("--ridge", type=float, default=.001)
     series_fit.add_argument("--scale-floor", type=float, default=1e-4)
+    series_fit.add_argument("--shape-context", type=int, default=0, help="Nombre de segments de forme normalisée ; 0 désactive")
+    series_fit.add_argument("--missing-rate", type=float, default=0., help="Taux de masquage des valeurs à l'ajustement")
+    series_fit.add_argument("--mask-probability", type=float, default=.5, help="Probabilité de masquer chaque historique")
+    series_fit.add_argument("--augmentation-seed", type=int, default=0)
     series_fit.add_argument("--batch-size", type=int, default=32)
     series_fit.add_argument("--device", default="cpu")
     series_fit.add_argument("--amp", choices=("none", "bf16", "fp16"), default="none")
@@ -374,8 +379,8 @@ def main(argv=None):
         save_checkpoint(args.output, model, step=step, trainer=trainer)
         print(f"Poids d'inférence écrits dans {args.output}")
     elif args.command == "refine-series-classifier":
-        if args.batch_size < 1:
-            parser.error("batch-size doit être > 0")
+        if args.batch_size < 1 or args.augmentation_seed < 0:
+            parser.error("batch-size doit être > 0 et augmentation-seed >= 0")
         if any(same_file(args.output, source) for source in (args.data, args.checkpoint)):
             parser.error("La sortie doit être distincte des fichiers d'entrée")
         model, _ = load_checkpoint(args.checkpoint, args.device)
@@ -384,8 +389,13 @@ def main(argv=None):
             parser.error("La sortie doit être distincte des images d'entrée")
         loader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=collate_records,
                             generator=torch.Generator().manual_seed(0))
+        augmentation = SeriesAugmentation(missing_rate=args.missing_rate, mask_probability=args.mask_probability)
         classifier = fit_series_classifier(model, loader, ridge=args.ridge, scale_floor=args.scale_floor,
-                                           amp=args.amp, checkpoint_sha256=file_sha256(args.checkpoint),
+                                           amp=args.amp, shape_context=args.shape_context,
+                                           augmentation=augmentation if args.missing_rate else None,
+                                           augmentation_seed=args.augmentation_seed,
+                                           augmentation_batch_size=args.batch_size if args.missing_rate else None,
+                                           checkpoint_sha256=file_sha256(args.checkpoint),
                                            dataset_sha256=dataset.fingerprint)
         classifier.validate_checkpoint(args.checkpoint)
         with prediction_stream(args.output) as stream:

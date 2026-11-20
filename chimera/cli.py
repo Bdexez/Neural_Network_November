@@ -239,6 +239,7 @@ def main(argv=None):
     retrieval.add_argument("--query-batch-size", type=int, default=16)
     retrieval.add_argument("--candidate-batch-size", type=int, default=1024)
     retrieval.add_argument("--exclude-self", action="store_true")
+    retrieval.add_argument("--skip-missing", action="store_true", help="Ignorer les lignes sans la modalité choisie")
     retrieval.add_argument("--output", help="Rapport JSON ; sinon stdout")
     export = commands.add_parser("export", help="Exporter les poids sans l'optimiseur pour l'inférence")
     export.add_argument("--checkpoint", required=True)
@@ -610,7 +611,8 @@ def main(argv=None):
         report = evaluate_retrieval(args.queries, args.candidates, args.relevance,
                                     args.query_modality, args.candidate_modality, top_k=args.top_k,
                                     query_batch_size=args.query_batch_size,
-                                    candidate_batch_size=args.candidate_batch_size, exclude_self=args.exclude_self)
+                                    candidate_batch_size=args.candidate_batch_size, exclude_self=args.exclude_self,
+                                    skip_missing=args.skip_missing)
         with prediction_stream(args.output) as stream:
             stream.write(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
         if args.output:

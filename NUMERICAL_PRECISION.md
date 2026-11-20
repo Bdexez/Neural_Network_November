@@ -16,3 +16,14 @@ L'export conserve les poids, le compteur d'étapes et la provenance d'origine, e
 Pour un nouveau modèle, ajouter `"stable_rms_norm": true` à sa configuration. Pour un fine-tuning depuis un checkpoint existant, passer `--init-from model.pt --model-overrides configs/stable-rms-norm-overrides.json` à `train` ; l'optimiseur et le planning repartent alors de zéro comme pour tout `--init-from`.
 
 Cette option protège le calcul RMS contre le débordement des carrés lorsque les activations d'entrée sont finies. Elle ne rend pas finies les entrées déjà infinies, ne protège pas les autres couches et ne peut représenter un résultat ou un gradient hors de la plage du dtype de sortie. Elle ajoute une réduction et des divisions à chaque normalisation ; son coût dépend de la taille du modèle et du matériel.
+
+## Mesure CPU
+
+Sur le checkpoint `tiny` du contrôle joint-affine, avec un lot synthétique identique de 16 exemples texte + série et deux threads CPU, cinq mesures alternent les deux modes après échauffement. La médiane passe de **7,39 ms à 8,39 ms**, soit environ **13,5 %** de temps supplémentaire dans cet essai. L'écart absolu maximal des logits est de `2,86e-6` ; aucune classe prédite ne change sur ce lot. Ces chiffres dépendent du matériel, de la charge et de la forme des entrées : ils ne prédisent pas le coût sur GPU ou sur d'autres tailles de modèle.
+
+Pour le vecteur FP32 `[1e20, 2e20]`, le chemin historique renvoie `[0, 0]` après débordement des carrés ; le chemin stable renvoie environ `[0,63246, 1,26491]` et des gradients finis. Les [mesures détaillées](artifacts/stable-rms-study.json) comprennent les échantillons de temps, la seed et l'empreinte du checkpoint.
+
+```bash
+.venv/bin/python tools/benchmark_stable_rms.py \
+  --checkpoint runs/joint-affine-pilot/control/latest.pt --output runs/stable-rms-study.json
+```

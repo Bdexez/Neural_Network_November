@@ -1,0 +1,72 @@
+{
+  "settings": {
+    "checkpoint": "/home/bdex/delivery/Neural_Network_November/runs/joint-affine-pilot/control/latest.pt",
+    "output": "artifacts/stable-rms-study.json",
+    "batch_size": 16,
+    "seed": 1901,
+    "threads": 2,
+    "repeats": 5,
+    "min_run_time": 0.5
+  },
+  "checkpoint_sha256": "2d2b6619ddf019a83f2458343b8665d091e62d1513507b9f7f8c97533e45fe43",
+  "checkpoint_step": 180,
+  "torch_version": "2.15.0+cpu",
+  "machine": "x86_64",
+  "cpu_count": 12,
+  "timing_seconds": {
+    "samples": {
+      "historique": [
+        0.007404596995911561,
+        0.007493810000596568,
+        0.007393275998765603,
+        0.007308584001293639,
+        0.007340424999711104
+      ],
+      "stable": [
+        0.00838978500541998,
+        0.00840180699742632,
+        0.008469598004012369,
+        0.008221837499149842,
+        0.008290554000268457
+      ]
+    },
+    "medians": {
+      "historique": 0.007393275998765603,
+      "stable": 0.00838978500541998
+    },
+    "stable_over_historical": 1.134785852282636
+  },
+  "max_absolute_difference": {
+    "logits": 2.86102294921875e-06,
+    "classification_logits": 1.430511474609375e-06,
+    "forecast": 4.76837158203125e-07
+  },
+  "class_predictions_changed": 0,
+  "extreme_example": {
+    "input": [
+      [
+        1.0000000200408773e+20,
+        2.0000000400817547e+20
+      ]
+    ],
+    "historical": [
+      [
+        0.0,
+        0.0
+      ]
+    ],
+    "stable": [
+      [
+        0.6324555277824402,
+        1.2649110555648804
+      ]
+    ],
+    "stable_gradient": [
+      [
+        2.5298218416199387e-21,
+        -1.264911223732557e-21
+      ]
+    ]
+  },
+  "scope": "CPU, un checkpoint et un lot synth\u00e9tique ; la vitesse d\u00e9pend du mat\u00e9riel et de la charge."
+}

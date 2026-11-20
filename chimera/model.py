@@ -226,9 +226,11 @@ class Chimera(nn.Module):
     def forward(
         self, input_ids=None, *, images=None, series=None, attention_mask=None,
         series_mask=None, labels=None, class_labels=None, forecast_targets=None, alignment_ids=None,
-        cache: ModelCache | None = None, use_cache=False,
+        alignment_cross_rank_views=False, cache: ModelCache | None = None, use_cache=False,
     ) -> ChimeraOutput:
         batch = self._validate(input_ids, images, series, attention_mask, series_mask, cache)
+        if type(alignment_cross_rank_views) is not bool:
+            raise ValueError("alignment_cross_rank_views doit être booléen")
         if use_cache and (self.training or input_ids is None):
             raise ValueError("use_cache nécessite eval() et des tokens texte")
         if cache is not None and not use_cache:
@@ -372,7 +374,8 @@ class Chimera(nn.Module):
             vectors = {i: F.normalize(self.alignment[i](v).float(), dim=-1) for i, v in align_vectors}
             losses["alignment"] = distributed_alignment_loss(vectors, class_labels, c.alignment_temperature,
                                                               c.alignment_mode, group=self._alignment_group,
-                                                              text_view=c.alignment_text_view, sample_ids=alignment_ids)
+                                                              text_view=c.alignment_text_view, sample_ids=alignment_ids,
+                                                              cross_rank_views=alignment_cross_rank_views)
             total = total + c.alignment_weight * losses["alignment"]
         elif len(align_vectors) > 1 and batch > 1:
             vectors = [F.normalize(self.alignment[i](v).float(), dim=-1) for i, v in align_vectors]

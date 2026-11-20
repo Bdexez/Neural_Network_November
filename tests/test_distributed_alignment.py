@@ -69,7 +69,8 @@ def alignment_worker(rank, init_file, directory, scenario):
             temperature = .3
         try:
             loss = distributed_alignment_loss(vectors, labels, temperature, mode, group=dist.group.WORLD,
-                                              text_view=text_view)
+                                              text_view=text_view,
+                                              cross_rank_views=scenario == 'mismatched_cross_rank_views' and rank == 1)
         except ValueError as exc:
             torch.save(dict(error=str(exc)), Path(directory) / f'{rank}.pt')
             return
@@ -182,7 +183,7 @@ class DistributedAlignmentTests(unittest.TestCase):
                     torch.testing.assert_close(result[rank]['right'] / 2, right.grad[section], rtol=1e-6, atol=1e-7)
 
     def test_ranks_reject_mismatched_configuration_before_shape_collectives(self):
-        for scenario in ('mismatched_mode','mismatched_dimension','mismatched_dtype','mismatched_temperature','mismatched_text_view'):
+        for scenario in ('mismatched_mode','mismatched_dimension','mismatched_dtype','mismatched_temperature','mismatched_text_view','mismatched_cross_rank_views'):
             with self.subTest(scenario=scenario):
                 for result in self.run_workers(scenario):
                     self.assertIn('différents selon les rangs',result['error'])

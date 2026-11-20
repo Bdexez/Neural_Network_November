@@ -275,3 +275,26 @@ Cette garantie est **marginale** : elle ne garantit pas le risque conditionnel p
 L'artefact lie le seuil aux empreintes exactes du checkpoint, de la tête et de la porte, vérifie aussi le contenu canonique de la tête et de la porte en mémoire, et conserve leur précision AMP ; il enregistre les effectifs, erreurs supplémentaires, taille des lots, device et version de PyTorch pendant la calibration. La commande refuse les fichiers identiques aux jeux de la tête ou de la porte. Les références facultatives `--classifier-data`, `--gate-data` et `--gate-validation-data` ajoutent un audit des historiques exacts et vérifient leurs empreintes ; elles ne détectent pas tous les chevauchements temporels. `evaluate` peut également recevoir `--guard-data` pour auditer le jeu de référence contre le jeu de test.
 
 L'évaluation rapporte l'accuracy avec et sans protection, la fréquence des sélections empêchées, ainsi que `series_gate_guard_harm_rate` et `series_gate_guard_benefit_rate` sur les seuls exemples étiquetés. Leur différence est le gain d'accuracy sur ce test. Avec `--iid-intervals`, des intervalles de Wilson approximatifs sont aussi disponibles pour ces deux taux, sous les hypothèses d'indépendance indiquées dans le README.
+
+### Comparaison synthétique de la protection
+
+L'essai reprend le checkpoint et l'ajustement de la porte décrits ci-dessus, puis utilise de nouvelles seeds : 1 536 exemples de référence non transformés pour régler une cible de 1 %, et 768 exemples de test distincts par condition. Les séries comptent 8, 16 ou 32 pas ; les masques et transformations sont appariés entre les méthodes. Sur la calibration, les erreurs supplémentaires passent de 91 à 14 ; cette baisse fait partie du réglage et ne constitue pas une mesure indépendante.
+
+| Pas | Transformation de test | Modèle de base | Porte seule | Porte protégée | Erreurs supplémentaires protégées |
+| ---: | --- | ---: | ---: | ---: | ---: |
+| 8 | Identité | 68,36 % | 67,06 % | 67,45 % | 1,04 % |
+| 8 | Décalage +1 | 30,34 % | 48,44 % | 43,36 % | 1,56 % |
+| 8 | Gain ×0,1 | 18,62 % | 53,91 % | 48,83 % | 5,99 % |
+| 16 | Identité | 71,88 % | 69,66 % | 70,96 % | 0,91 % |
+| 16 | Décalage +1 | 22,92 % | 43,62 % | 36,72 % | 0,52 % |
+| 16 | Gain ×0,1 | 26,04 % | 47,40 % | 42,84 % | 6,25 % |
+| 32 | Identité | 89,19 % | 86,85 % | 89,19 % | 0,13 % |
+| 32 | Décalage +1 | 18,75 % | 58,72 % | 54,56 % | 0,00 % |
+| 32 | Gain ×0,1 | 32,42 % | 52,47 % | 39,32 % | 5,47 % |
+
+Les séries du jeu de référence sont regroupées par longueur au sein des lots, et chaque ligne du tableau fixe une longueur : ces conditions ne démontrent pas l'échangeabilité requise pour la garantie marginale. La protection réduit certains gains sous transformation ; les taux supérieurs à 1 % sous gain ×0,1 illustrent la limite hors de la distribution de référence. L'essai repose sur un seul checkpoint et des données synthétiques. Les [résultats complets](artifacts/series-gate-guard-study.json) contiennent les seeds, les taux de bénéfice et les empreintes.
+
+```bash
+.venv/bin/python tools/benchmark_series_gate_guard.py \
+  --checkpoint runs/joint-affine-pilot/control/latest.pt --output runs/series-gate-guard-study.json
+```

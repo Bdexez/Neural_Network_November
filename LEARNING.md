@@ -98,3 +98,25 @@ Tous les rangs du groupe distribué par défaut doivent utiliser la même config
 En mode évaluation, ou sans groupe distribué à plusieurs rangs, le calcul reste local. Cela permet notamment à la validation effectuée sur le seul rang 0 de fonctionner sans collective. Les groupes de communication ne sont ni sauvegardés dans le checkpoint ni copiés avec le modèle ; ils sont recréés collectivement au prochain entraînement distribué.
 
 Les tests comparent la perte et les gradients à un calcul sur lot global, en modes `paired` et `class`, avec lots inégaux, étiquettes inconnues, modalités absentes, accumulation et rang sans gradient local. Une reprise DDP sur deux processus CPU avec checkpointing des activations reproduit les poids d'une exécution continue. Les essais couvrent Gloo sur CPU ; aucun test NCCL/GPU ni gain de qualité après entraînement réel n'est revendiqué.
+
+### Essai synthétique apparié
+
+Deux processus CPU affinent le même checkpoint `tiny` pendant 80 étapes, avec un exemple par rang et par étape, pour trois seeds d'entraînement. Les deux modes reçoivent les mêmes exemples et le même budget ; `alignment_mode` vaut `class` et le poids d'alignement 0,2. Avec ce lot local de taille 1, la perte contrastive locale est absente aux 80 étapes, tandis que le mode global la calcule aux 80 étapes. Les données d'entraînement contiennent texte, image et série ; le texte synthétique indique explicitement la classe.
+
+Le test utilise 512 autres exemples, avec des seeds distinctes de l'entraînement et de sa validation pour cet essai. Il ne fournit **pas de texte** au modèle : chaque image interroge les 32 séries de son lot et la recherche est correcte si la série sélectionnée porte la même classe. La MAE porte sur les prévisions médianes avec image et série.
+
+| Seed | Recherche de classe, local | Recherche de classe, global | MAE, local | MAE, global |
+| ---: | ---: | ---: | ---: | ---: |
+| 101000000 | 75,39 % | 95,90 % | 0,17366 | 0,17964 |
+| 103000000 | 99,02 % | 91,60 % | 0,17204 | 0,21031 |
+| 105000000 | 81,05 % | 80,86 % | 0,17941 | 0,17450 |
+| Moyenne | 85,16 % | 89,45 % | 0,17504 | 0,18815 |
+
+Le gain moyen apparié de recherche est de 4,30 points, avec un écart-type de 14,50 points entre les trois différences ; la MAE moyenne augmente d'environ 7,5 %. Ces trois entraînements, un seul checkpoint initial et des modalités synthétiques faciles ne démontrent pas une amélioration générale. La recherche de classe accepte une autre série de même classe ; elle ne mesure pas l'identification unique d'un exemple. Les [mesures complètes](artifacts/global-alignment-study.json) incluent également la recherche de paire exacte, l'accuracy, les seeds et les empreintes.
+
+```bash
+.venv/bin/python tools/compare_global_alignment.py \
+  --checkpoint runs/joint-affine-pilot/control/latest.pt --output-dir runs/global-alignment-study
+```
+
+Le dossier de sortie doit être nouveau. L'outil vérifie que les plages de seeds d'entraînement, de validation et de test de cet essai sont disjointes et conserve les logs et checkpoints locaux de chaque branche.

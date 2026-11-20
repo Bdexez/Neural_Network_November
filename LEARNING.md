@@ -97,7 +97,7 @@ Tous les rangs du groupe distribué par défaut doivent utiliser la même config
 
 En mode évaluation, ou sans groupe distribué à plusieurs rangs, le calcul reste local. Cela permet notamment à la validation effectuée sur le seul rang 0 de fonctionner sans collective. Les groupes de communication ne sont ni sauvegardés dans le checkpoint ni copiés avec le modèle ; ils sont recréés collectivement au prochain entraînement distribué.
 
-Les tests comparent la perte et les gradients à un calcul sur lot global, en modes `paired` et `class`, avec lots inégaux, étiquettes inconnues, modalités absentes, accumulation et rang sans gradient local. Une reprise DDP sur deux processus CPU avec checkpointing des activations reproduit les poids d'une exécution continue. Les essais couvrent Gloo sur CPU ; aucun test NCCL/GPU ni gain de qualité après entraînement réel n'est revendiqué.
+Les tests comparent la perte et les gradients à un calcul sur lot global, en modes `paired` et `class`, avec lots inégaux, étiquettes inconnues, modalités absentes, accumulation, rang sans gradient local et rang sans cible supervisée. Une reprise DDP sur deux processus CPU avec checkpointing des activations reproduit les poids d'une exécution continue. Les essais couvrent Gloo sur CPU ; aucun test NCCL/GPU ni gain de qualité après entraînement réel n'est revendiqué.
 
 ### Essai synthétique apparié
 

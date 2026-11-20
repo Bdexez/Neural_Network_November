@@ -17,6 +17,7 @@ from chimera import Chimera, ChimeraConfig
 from chimera.data import synthetic_batch
 from chimera.distributed_alignment import distributed_alignment_loss
 from chimera.training import DistributedTrainingModel
+from chimera.observed_objective import target_counts
 from chimera.losses import symmetric_contrastive_loss
 
 
@@ -115,8 +116,16 @@ def model_worker(rank, init_file, directory, scenario, mode):
                     part.pop(key)
                 if rank == 1:
                     part.pop('images')
+            if scenario == 'unlabeled' and rank == 1:
+                part.pop('class_labels')
             with wrapped.no_sync() if scenario == 'accumulate' and i == 0 else nullcontext():
-                loss, terms, _, _ = wrapped(**part)
+                if scenario == 'unlabeled':
+                    counts = target_counts(part, config.prediction_steps)
+                    total = counts.clone()
+                    dist.all_reduce(total)
+                    loss, terms, _, _ = wrapped(local_counts=counts, total_counts=total, world=2, **part)
+                else:
+                    loss, terms, _, _ = wrapped(**part)
                 seen.append(terms['alignment'].item())
                 (loss / len(sections)).backward()
         names = ('embedding.weight','alignment.0.weight','alignment.1.weight','alignment.2.weight',
@@ -264,6 +273,21 @@ class DistributedAlignmentTests(unittest.TestCase):
             for grad in result['gradients'].values():
                 if grad is not None:
                     self.assertEqual(grad.count_nonzero().item(),0)
+
+    def test_ddp_global_alignment_with_unlabeled_rank(self):
+        config = model_config('class',scope='local')
+        torch.manual_seed(712)
+        reference = Chimera(config).train()
+        batch = model_batch(config)
+        batch['class_labels'][-1] = -100
+        expected = reference(**batch)
+        expected.loss.backward()
+        results = self.model_results('unlabeled',mode='class')
+        for result in results:
+            self.assertAlmostEqual(result['alignment'][0],expected.losses['alignment'].item(),places=5)
+            for name, actual in result['gradients'].items():
+                wanted = dict(reference.named_parameters())[name].grad
+                torch.testing.assert_close(actual,wanted,rtol=1e-3,atol=2e-6,msg=name)
 
     def test_ddp_accumulation_compares_each_global_microbatch(self):
         config = model_config(scope='local')

@@ -58,7 +58,11 @@ def alignment_worker(rank, init_file, directory, scenario):
         mode = 'class' if scenario in ('class','class_unknown','mismatched_cross_class_views') else 'paired'
         if scenario == 'mismatched_mode':
             mode = 'class' if rank == 1 else 'paired'
+        if (scenario == 'invalid_mode' and rank == 1) or scenario == 'all_invalid_mode':
+            mode = 'unknown'
         text_view = 'isolated' if scenario == 'mismatched_text_view' and rank == 1 else 'joint'
+        if (scenario == 'invalid_view' and rank == 1) or scenario == 'all_invalid_view':
+            text_view = 'unknown'
         if scenario == 'mismatched_dimension' and rank == 1:
             vectors = {key:value[:,:2] for key,value in vectors.items()}
         if scenario == 'mismatched_dtype' and rank == 1:
@@ -67,6 +71,8 @@ def alignment_worker(rank, init_file, directory, scenario):
             temperature = .4 if rank == 1 else .3
         else:
             temperature = .3
+        if (scenario == 'invalid_temperature' and rank == 1) or scenario == 'all_invalid_temperature':
+            temperature = float('nan')
         cross_rank = scenario == 'mismatched_cross_rank_views' and rank == 1
         cross_class = ((scenario in ('mismatched_cross_class_views', 'mismatched_cross_class_views_paired')
                         and rank == 1) or scenario == 'invalid_cross_class_views_paired')
@@ -202,7 +208,7 @@ class DistributedAlignmentTests(unittest.TestCase):
                     torch.testing.assert_close(result[rank]['right'] / 2, right.grad[section], rtol=1e-6, atol=1e-7)
 
     def test_ranks_reject_mismatched_configuration_before_shape_collectives(self):
-        for scenario in ('mismatched_mode','mismatched_dimension','mismatched_dtype','mismatched_temperature','mismatched_text_view','mismatched_cross_rank_views','mismatched_cross_class_views','mismatched_cross_class_views_paired','invalid_cross_rank_type','invalid_cross_class_type'):
+        for scenario in ('mismatched_mode','mismatched_dimension','mismatched_dtype','mismatched_temperature','mismatched_text_view','mismatched_cross_rank_views','mismatched_cross_class_views','mismatched_cross_class_views_paired','invalid_cross_rank_type','invalid_cross_class_type','invalid_mode','invalid_view','invalid_temperature'):
             with self.subTest(scenario=scenario):
                 for result in self.run_workers(scenario):
                     self.assertIn('différents selon les rangs',result['error'])
@@ -216,6 +222,11 @@ class DistributedAlignmentTests(unittest.TestCase):
                                ('all_invalid_cross_class_type', 'cross_class_views')):
             for result in self.run_workers(scenario):
                 self.assertIn(f'{name} doit être booléen', result['error'])
+
+    def test_invalid_scalar_configuration_is_rejected_on_all_ranks(self):
+        for scenario in ('all_invalid_mode', 'all_invalid_view', 'all_invalid_temperature'):
+            for result in self.run_workers(scenario):
+                self.assertIn('température d\'alignement invalide', result['error'])
 
     def test_model_synchronizes_class_option_validation(self):
         for scenario, message in (('mismatched_cross_class_views_paired', 'différents selon les rangs'),

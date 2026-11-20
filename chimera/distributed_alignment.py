@@ -90,18 +90,20 @@ def distributed_alignment_loss(vectors, class_labels, temperature, mode, *, grou
     if sample_ids is not None and (sample_ids.shape != (batch,) or sample_ids.dtype != torch.long
                                    or sample_ids.device != sample.device or (sample_ids < -1).any()):
         raise ValueError("sample_ids doit être long [B], avec -1 pour les identités inconnues")
-    if (mode not in ("paired", "class") or text_view not in ("joint", "isolated")
-            or not math.isfinite(temperature) or temperature <= 0):
-        raise ValueError("Mode, vue textuelle ou température d'alignement invalide")
     dtype_codes = {torch.float16: 1, torch.bfloat16: 2, torch.float32: 3, torch.float64: 4}
-    if sample.dtype not in dtype_codes:
-        raise ValueError("Dtype de représentation non pris en charge")
+    dtype_code = dtype_codes.get(sample.dtype, 0)
+    mode_code = {"paired": 0, "class": 1}.get(mode, -1) if isinstance(mode, str) else -1
+    view_code = {"joint": 0, "isolated": 1}.get(text_view, -1) if isinstance(text_view, str) else -1
+    try:
+        valid_temperature = bool(math.isfinite(temperature) and temperature > 0)
+        temperature_bits = struct.unpack("!q", struct.pack("!d", float(temperature)))[0] if valid_temperature else 0
+    except (TypeError, ValueError, OverflowError, RuntimeError):
+        valid_temperature, temperature_bits = False, 0
     world = dist.get_world_size(group)
-    temperature_bits = struct.unpack("!q", struct.pack("!d", float(temperature)))[0]
     cross_rank_code = int(cross_rank_views) if type(cross_rank_views) is bool else -1
     cross_class_code = int(cross_class_views) if type(cross_class_views) is bool else -1
-    specification = torch.tensor([batch, dim, dtype_codes[sample.dtype], int(mode == "class"),
-                                  int(text_view == "isolated"), temperature_bits, cross_rank_code,
+    specification = torch.tensor([batch, dim, dtype_code, mode_code,
+                                  view_code, temperature_bits, cross_rank_code,
                                   cross_class_code],
                                  dtype=torch.long, device=sample.device)
     specifications = [torch.empty_like(specification) for _ in range(world)]
@@ -110,6 +112,10 @@ def distributed_alignment_loss(vectors, class_labels, temperature, mode, *, grou
     rows = [value.tolist() for value in specifications]
     if any(row[1:] != rows[0][1:] for row in rows[1:]):
         raise ValueError("Dimensions, dtype ou paramètres d'alignement différents selon les rangs")
+    if not dtype_code:
+        raise ValueError("Dtype de représentation non pris en charge")
+    if mode_code < 0 or view_code < 0 or not valid_temperature:
+        raise ValueError("Mode, vue textuelle ou température d'alignement invalide")
     if cross_rank_code < 0:
         raise ValueError("cross_rank_views doit être booléen")
     if cross_class_code < 0:

@@ -41,6 +41,29 @@ class CompareSharedModalityBatchesTests(unittest.TestCase):
             self.assertNotEqual(rejected.returncode, 0)
             self.assertEqual((output / 'comparison.json').read_bytes(), before)
 
+    @unittest.skipUnless(dist.is_available() and dist.is_gloo_available(), 'Gloo indisponible')
+    def test_periodic_mode_reports_intermediate_exposure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkpoint, output = root / 'parent.pt', root / 'periodic-study'
+            torch.manual_seed(32)
+            save_checkpoint(checkpoint, Chimera(ChimeraConfig.preset('tiny')))
+            script = Path(__file__).resolve().parents[1] / 'tools/compare_shared_modality_batches.py'
+            command = [sys.executable, str(script), '--checkpoint', str(checkpoint), '--output-dir', str(output),
+                       '--seeds', '17', '--steps', '2', '--train-examples', '12', '--batch-size', '2',
+                       '--train-seed', '100', '--test-seed', '2000000', '--test-batches', '1',
+                       '--test-batch-size', '4', '--partial-interval', '2']
+            run = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120)
+            self.assertEqual(run.returncode, 0, run.stdout[-8000:])
+            report = json.loads((output / 'comparison.json').read_text())
+            rows = {row['mode']: row for row in report['runs']}
+            self.assertEqual(set(rows), {'shared', 'sharded', 'periodic'})
+            self.assertEqual(rows['shared']['exposure']['unique_examples_per_step_sum'], 4)
+            self.assertEqual(rows['periodic']['exposure']['unique_examples_per_step_sum'], 6)
+            self.assertEqual(rows['sharded']['exposure']['unique_examples_per_step_sum'], 8)
+            self.assertIn('periodic_mean', report['aggregate']['text_to_series_class_top1'])
+
+
 
 if __name__ == '__main__':
     unittest.main()

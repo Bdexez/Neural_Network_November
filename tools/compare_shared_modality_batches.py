@@ -32,9 +32,9 @@ def write_data(path, config, *, count, seed):
             stream.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + '\n')
 
 
-def exposure(dataset, *, batch_size, seed, steps, shared):
+def exposure(dataset, *, batch_size, seed, steps, shared, interval=1):
     samplers = [ModalityBatchSampler(dataset, batch_size, num_replicas=2, rank=rank, seed=seed,
-                                     shared_across_ranks=shared) for rank in range(2)]
+                                     shared_across_ranks=shared, shared_interval=interval) for rank in range(2)]
     unique, total = 0, 0
     for epoch_start in range(0, steps, len(samplers[0])):
         epoch = epoch_start // len(samplers[0])
@@ -85,10 +85,12 @@ def main():
     parser.add_argument('--test-batch-size', type=int, default=32)
     parser.add_argument('--lr', type=float, default=.0003)
     parser.add_argument('--alignment-weight', type=float, default=.2)
+    parser.add_argument('--partial-interval', type=int, help='Ajouter un mode partageant un micro-lot sur N')
     args = parser.parse_args()
     if (min(args.steps, args.train_examples, args.batch_size, args.test_batches) < 1 or args.test_batch_size < 2
             or not math.isfinite(args.lr) or args.lr <= 0 or not math.isfinite(args.alignment_weight)
-            or args.alignment_weight < 0 or len(set(args.seeds)) != len(args.seeds)):
+            or args.alignment_weight < 0 or len(set(args.seeds)) != len(args.seeds)
+            or args.partial_interval is not None and args.partial_interval < 2):
         parser.error('Tailles, seeds, taux ou poids invalides')
     validation_seeds = [seed + 1000000 for seed in args.seeds]
     test_range = range(args.test_seed, args.test_seed + args.test_batches)
@@ -117,11 +119,13 @@ def main():
     for name in ('RANK', 'LOCAL_RANK', 'WORLD_SIZE', 'MASTER_ADDR', 'MASTER_PORT'):
         env.pop(name, None)
     runs = []
+    modes = [('sharded', False, 1), ('shared', True, 1)]
+    if args.partial_interval is not None:
+        modes.append(('periodic', True, args.partial_interval))
     for seed in args.seeds:
-        for shared in (False, True):
+        for label, shared, interval in modes:
             if file_sha256(checkpoint) != checkpoint_sha or file_sha256(data) != data_sha:
                 raise ValueError('Le checkpoint ou les données ont changé pendant la comparaison')
-            label = 'shared' if shared else 'sharded'
             destination = output / f'{label}-{seed}'
             command = [sys.executable, '-m', 'torch.distributed.run', '--standalone', '--nproc-per-node=2',
                        '-m', 'chimera', '--threads', '1', 'train', '--init-from', str(checkpoint),
@@ -132,6 +136,8 @@ def main():
                        '--save-every', str(args.steps), '--output', str(destination)]
             if shared:
                 command.append('--shared-modality-batches')
+                if interval != 1:
+                    command.extend(['--shared-modality-batch-interval', str(interval)])
             print(json.dumps(dict(event='training', seed=seed, mode=label)), flush=True)
             start = time.monotonic()
             with (output / f'{label}-{seed}.log').open('x', encoding='utf-8') as stream:
@@ -147,7 +153,8 @@ def main():
             logs = [json.loads(line) for line in (destination / 'metrics.jsonl').read_text().splitlines()]
             row = dict(seed=seed, mode=label, step=payload['step'], checkpoint_sha256=file_sha256(trained_path),
                        elapsed_seconds=elapsed, exposure=exposure(dataset, batch_size=args.batch_size,
-                                                                   seed=seed, steps=args.steps, shared=shared),
+                                                                   seed=seed, steps=args.steps, shared=shared,
+                                                                   interval=interval),
                        nonzero_alignment_steps=sum(item.get('alignment', 0.) > 1e-8 for item in logs), metrics=metrics)
             runs.append(row)
             print(json.dumps(dict(event='evaluated', **row)), flush=True)
@@ -159,6 +166,12 @@ def main():
         aggregate[key] = dict(sharded_mean=statistics.mean(baseline), shared_mean=statistics.mean(shared),
                               paired_difference_mean=statistics.mean(diffs),
                               paired_difference_std=statistics.stdev(diffs) if len(diffs) > 1 else None)
+        if args.partial_interval is not None:
+            periodic = [row['metrics'][key] for row in runs if row['mode'] == 'periodic']
+            periodic_diffs = [b - a for a, b in zip(baseline, periodic)]
+            aggregate[key].update(periodic_mean=statistics.mean(periodic),
+                                  periodic_difference_mean=statistics.mean(periodic_diffs),
+                                  periodic_difference_std=statistics.stdev(periodic_diffs) if len(periodic_diffs) > 1 else None)
     report = dict(settings=vars(args), parent_sha256=checkpoint_sha, train_data_sha256=data_sha,
                   torch_version=str(torch.__version__), runs=runs, aggregate=aggregate,
                   scope="Données synthétiques ; le texte indique la classe. Le partage traite moins de lignes uniques "

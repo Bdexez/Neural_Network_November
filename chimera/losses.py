@@ -7,20 +7,37 @@ from torch.nn import functional as F
 def quantile_pinball_loss(forecast, targets, quantiles):
     """Perte moyenne des quantiles sur les cibles finies, accumulée au moins en FP32."""
     dtype = torch.promote_types(torch.float32, torch.promote_types(forecast.dtype, targets.dtype))
-    prediction = forecast.to(dtype=dtype)
     observed = torch.isfinite(targets)
+    # Une prévision sur une cible absente ne contribue ni à la perte ni à son gradient.
+    prediction = torch.where(observed.unsqueeze(-1), forecast, 0).to(dtype=dtype)
     target = torch.where(observed, targets, 0).to(dtype=dtype)
+    magnitude = torch.maximum(prediction.detach().abs().amax(), target.detach().abs().amax()).item()
     if dtype == torch.float32:
         # Un résidu peut atteindre deux fois l'amplitude et chaque élément
         # peut contribuer à la somme avant sa division par le nombre de cibles.
         limit = torch.finfo(torch.float32).max / (4 * max(forecast.numel(), 1))
-        magnitude = torch.maximum(prediction.detach().abs().amax(), target.detach().abs().amax()).item()
         if magnitude > limit:
             prediction, target = prediction.double(), target.double()
-    residual = target.unsqueeze(-1) - prediction
+            dtype = torch.float64
+    # Même en FP64, la différence ou la somme peuvent déborder avant la
+    # division finale. La demi-différence évite de perdre les petits résidus
+    # d'autres exemples, même si une prévision est proche du maximum FP64.
+    limit = torch.finfo(torch.float64).max / (4 * max(forecast.numel(), 1))
+    extreme = dtype == torch.float64 and magnitude > limit
+    residual = (target.unsqueeze(-1) * 0.5 - prediction * 0.5 if extreme
+                else target.unsqueeze(-1) - prediction)
     q = prediction.new_tensor(quantiles)
     pinball = torch.maximum(q * residual, (q - 1) * residual)
-    return (pinball * observed.unsqueeze(-1)).sum() / (observed.sum().clamp_min(1) * len(quantiles))
+    denominator = observed.sum().clamp_min(1) * len(quantiles)
+    if extreme:
+        # La somme est positive : diviser d'abord uniquement si nécessaire,
+        # puis rétablir le facteur deux une fois la moyenne calculée.
+        maximum = pinball.detach().amax().item()
+        if maximum > torch.finfo(torch.float64).max / (2 * max(forecast.numel(), 1)):
+            return (pinball / denominator).sum() * 2
+        return (pinball.sum() / denominator) * 2
+    return pinball.sum() / denominator
+
 
 
 def symmetric_contrastive_loss(similarity, class_labels=None):

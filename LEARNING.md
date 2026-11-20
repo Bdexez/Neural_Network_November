@@ -167,6 +167,26 @@ Les nouveaux entraînements hétérogènes activent également `--alignment-cros
 
 Pour des données étiquetées mais non appariées, `--alignment-cross-class-views` autorise en plus les vues de lignes différentes à devenir positives dès que leur classe connue coïncide. L'option exige `alignment_mode: "class"`, ne nécessite pas d'identifiant et agit uniquement avec l'alignement global distribué. Elle reste désactivée par défaut et son état est restauré à la reprise. Les classes doivent désigner les mêmes catégories dans chaque source ; cette supervision peut créer des positifs inadéquats si les catégories sont larges. Les vues sans partenaire admissible sont écartées, y compris celles de classe inconnue, sauf si leur ligne ou leur identité fournit une correspondance. Comme pour les autres objectifs à plusieurs positifs, la valeur numérique de la perte dépend de leur nombre et de la composition du lot.
 
+### Essai sur des sources synthétiques non appariées
+
+Deux sources indépendantes contiennent chacune 48 lignes : la première fournit seulement le texte et la classe, la seconde seulement la série, son futur et la classe. Le même checkpoint `tiny` est affiné pendant 60 étapes sur deux rangs CPU, avec trois seeds appariées, un lot local de 4 et un poids d'alignement de 0,2. Les deux variantes voient les mêmes lignes ; seule `--alignment-cross-class-views` change. Les 256 exemples de test utilisent d'autres tirages. La recherche accepte toute série du lot de 32 ayant la même classe que le texte ; la classification et la prévision médiane utilisent seulement la série.
+
+| Seed | Recherche classe, témoin | Recherche classe, option | Exactitude série, témoin | Exactitude série, option | MAE série, témoin | MAE série, option |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 211000000 | 97,27 % | 87,11 % | 87,89 % | 88,28 % | 0,19740 | 0,19005 |
+| 213000000 | 100 % | 100 % | 84,38 % | 83,98 % | 0,19891 | 0,19247 |
+| 215000000 | 100 % | 100 % | 82,81 % | 83,20 % | 0,18914 | 0,18829 |
+| Moyenne | 99,09 % | 95,70 % | 85,03 % | 85,16 % | 0,19515 | 0,19027 |
+
+L'alignement est non nul à 22 à 31 étapes sur 60 avec l'option, et à aucune étape chez le témoin. La différence moyenne appariée est de −3,39 points pour la recherche, avec un écart-type de 5,86 points ; elle est de +0,13 point pour la classification et de −0,00488 pour la MAE. Le résultat de recherche se dégrade donc sur une graine et reste inchangé sur les deux autres ; il ne justifie pas d'activer l'option par défaut. Le texte synthétique énonce explicitement la classe, le témoin est déjà proche du plafond et l'indépendance du checkpoint parent vis-à-vis du générateur n'est pas établie. Ces résultats ne démontrent pas de performance sur des sources réelles. Les [données agrégées et empreintes](artifacts/unpaired-class-alignment-study.json) conservent aussi les mesures par graine.
+
+```bash
+.venv/bin/python tools/compare_unpaired_class_alignment.py \
+  --checkpoint runs/joint-affine-pilot/control/latest.pt --output-dir runs/unpaired-class-study
+```
+
+Le dossier de sortie doit être nouveau ; l'outil conserve les journaux et checkpoints de chaque variante et vérifie les seeds des sources et du test.
+
 Les lots répétés pour équilibrer les rangs peuvent présenter plusieurs vues de la même ligne. Les nouveaux entraînements avec `--mixed-modalities` transmettent l'indice stable de chaque ligne comme identité à la perte : les copies de cette ligne sont des positifs supplémentaires, plutôt que des négatifs dans l'alignement `paired`. `--alignment-duplicate-positives` active aussi ce comportement pour un jeu homogène ; l'option négative le désactive et les anciens checkpoints conservent leur réglage à la reprise. Les étiquettes de classe positives restent combinées aux identités lorsqu'elles sont activées. Ces répétitions affectent toujours les autres pertes et les poids des exemples ; les entrées augmentées sont supposées préserver leur correspondance.
 
 ## Vue textuelle isolée pour l'alignement

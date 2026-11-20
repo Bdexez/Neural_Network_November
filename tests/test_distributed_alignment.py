@@ -69,6 +69,8 @@ def alignment_worker(rank, init_file, directory, scenario):
             vectors = {key:value.double() for key,value in vectors.items()}
         if scenario == 'invalid_sample' and rank == 1:
             vectors = {0: left[0, 0]}
+        if scenario == 'invalid_modality' and rank == 1:
+            vectors = {7: left}
         if scenario == 'invalid_vector_shape' and rank == 1:
             vectors = {0: left, 1: right[:, :2]}
         if scenario == 'invalid_labels' and rank == 1:
@@ -237,6 +239,7 @@ class DistributedAlignmentTests(unittest.TestCase):
 
     def test_invalid_local_tensors_are_rejected_on_all_ranks(self):
         for scenario, message in (('invalid_sample', 'forme [B, D]'),
+                                  ('invalid_modality', 'modalité connue'),
                                   ('invalid_vector_shape', 'partager forme'),
                                   ('invalid_labels', 'class_labels'), ('invalid_ids', 'sample_ids')):
             with self.subTest(scenario=scenario):

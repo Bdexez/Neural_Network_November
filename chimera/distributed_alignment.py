@@ -75,13 +75,15 @@ def distributed_alignment_loss(vectors, class_labels, temperature, mode, *, grou
     Les vecteurs, déjà normalisés, sont indexés par modalité (0, 1, 2).
     Tous les rangs du groupe doivent appeler cette fonction dans le même ordre.
     """
-    if not vectors or any(key not in (0, 1, 2) for key in vectors):
+    if not vectors:
         raise ValueError("Au moins une modalité connue est requise")
     sample = next(iter(vectors.values()))
     batch = sample.size(0) if sample.ndim >= 1 else 0
     dim = sample.size(1) if sample.ndim >= 2 else 0
     input_error = 0
-    if sample.ndim != 2 or not sample.is_floating_point() or batch < 1:
+    if any(key not in (0, 1, 2) for key in vectors):
+        input_error = 5
+    elif sample.ndim != 2 or not sample.is_floating_point() or batch < 1:
         input_error = 1
     elif any(value.shape != sample.shape or value.device != sample.device or value.dtype != sample.dtype
              for value in vectors.values()):
@@ -115,7 +117,8 @@ def distributed_alignment_loss(vectors, class_labels, temperature, mode, *, grou
     errors = ("", "Les représentations doivent avoir la forme [B, D]",
               "Les représentations doivent partager forme, dtype et device",
               "class_labels doit avoir la forme [B] et le même device",
-              "sample_ids doit être long [B], avec -1 pour les identités inconnues")
+              "sample_ids doit être long [B], avec -1 pour les identités inconnues",
+              "Au moins une modalité connue est requise")
     for rank, row in enumerate(rows):
         if row[-1]:
             raise ValueError(f"Rang {rank} : {errors[row[-1]]}")

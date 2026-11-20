@@ -17,6 +17,42 @@ from chimera.training import load_checkpoint
 
 class ComplementaryAlignmentTrainingTests(unittest.TestCase):
     @unittest.skipUnless(dist.is_available() and dist.is_gloo_available(), 'Gloo indisponible')
+    def test_unpaired_records_align_by_class_without_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = replace(ChimeraConfig.preset('tiny'), alignment_scope='global', alignment_mode='class',
+                             alignment_text_view='isolated', dropout=0.)
+            config_path, data = root / 'config.json', root / 'data.jsonl'
+            config.save(config_path)
+            rows = ([dict(text=f'signal {index}', class_label=index) for index in range(2)]
+                    + [dict(series=[[float(index), 1., 2.], [2., 1., float(index)]], class_label=index)
+                       for index in range(2)])
+            data.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+            base = [sys.executable, '-m', 'torch.distributed.run', '--standalone', '--nproc-per-node=2',
+                    '-m', 'chimera', '--threads', '1', 'train', '--config', str(config_path), '--data', str(data),
+                    '--steps', '1', '--batch-size', '2', '--mixed-modalities', '--no-shuffle',
+                    '--no-alignment-duplicate-positives', '--modality-dropout', '0',
+                    '--loss-normalization', 'observed', '--seed', '0', '--log-every', '1']
+            env = dict(os.environ)
+            for name in ('RANK', 'LOCAL_RANK', 'WORLD_SIZE', 'MASTER_ADDR', 'MASTER_PORT'):
+                env.pop(name, None)
+            for name, extra in (('enabled', ['--alignment-cross-class-views']), ('disabled', [])):
+                output = root / name
+                result = subprocess.run(base + ['--output', str(output)] + extra, env=env, text=True,
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120)
+                self.assertEqual(result.returncode, 0, result.stdout[-8000:])
+            enabled, payload = load_checkpoint(root / 'enabled/latest.pt')
+            disabled, _ = load_checkpoint(root / 'disabled/latest.pt')
+            self.assertTrue(payload['trainer']['alignment_cross_class_views'])
+            metrics = {name: json.loads((root / name / 'metrics.jsonl').read_text().splitlines()[0])
+                       for name in ('enabled', 'disabled')}
+            self.assertEqual(metrics['disabled']['alignment'], 0.)
+            self.assertGreater(metrics['enabled']['alignment'], .01)
+            for index in (1, 2):
+                self.assertGreater((enabled.alignment[index].weight - disabled.alignment[index].weight)
+                                   .abs().max().item(), 0)
+
+    @unittest.skipUnless(dist.is_available() and dist.is_gloo_available(), 'Gloo indisponible')
     def test_balanced_modalities_pair_repeated_rows_across_ranks(self):
         batch = {'input_ids': torch.tensor([[1, 2], [1, 3]]), 'labels': torch.tensor([[1, 2], [1, 3]]),
                  'series': torch.ones(2, 2, 3), 'class_labels': torch.tensor([0, 1])}

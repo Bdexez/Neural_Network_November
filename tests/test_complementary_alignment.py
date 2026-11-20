@@ -6,7 +6,7 @@ import torch
 from torch import distributed as dist
 from torch.nn import functional as F
 
-from chimera.distributed_alignment import distributed_alignment_loss
+from chimera.distributed_alignment import _rectangular_alignment, distributed_alignment_loss
 
 
 LEFT = torch.tensor([[.8, .1, .3], [.2, .9, .4], [.1, .3, .9]], dtype=torch.float32)
@@ -17,9 +17,11 @@ def worker(rank, group_file, output, case):
     torch.set_num_threads(1)
     dist.init_process_group('gloo', init_method=f'file://{group_file}', rank=rank, world_size=2)
     try:
-        if case in ('rectangular', 'class'):
+        if case in ('rectangular', 'class', 'cross_class', 'cross_class_unknown', 'cross_class_no_match', 'cross_class_disabled'):
             values = LEFT.clone() if rank == 0 else RIGHT[:2].clone()
             ids = torch.tensor([7, 7, 9] if rank == 0 else [7, 9])
+            if case.startswith('cross_class'):
+                ids = None
         elif case == 'unmatched':
             values = LEFT.clone() if rank == 0 else RIGHT.clone()
             ids = torch.tensor([7, 9, -1] if rank == 0 else [7, 9, 11])
@@ -28,10 +30,20 @@ def worker(rank, group_file, output, case):
             ids = (None if case == 'no_ids' else torch.tensor([11, 12] if case == 'disjoint' and rank == 1 else [7, 9]))
         values.requires_grad_()
         vectors = {0: values} if rank == 0 else {1: values}
-        labels = torch.tensor([0, 1, 1] if rank == 0 else [0, 1]) if case == 'class' else None
-        loss = distributed_alignment_loss(vectors, labels, .4, 'class' if case == 'class' else 'paired',
+        if case == 'class':
+            labels = torch.tensor([0, 1, 1] if rank == 0 else [0, 1])
+        elif case.startswith('cross_class'):
+            labels = torch.tensor([0, 0, 1] if rank == 0 else [0, 1])
+            if case == 'cross_class_unknown' and rank == 0:
+                labels[1] = -100
+            if case == 'cross_class_no_match' and rank == 1:
+                labels += 2
+        else:
+            labels = None
+        loss = distributed_alignment_loss(vectors, labels, .4, 'class' if labels is not None else 'paired',
                                           group=dist.group.WORLD, sample_ids=ids,
-                                          cross_rank_views=case != 'disabled')
+                                          cross_rank_views=case != 'disabled',
+                                          cross_class_views=case.startswith('cross_class') and case != 'cross_class_disabled')
         loss.backward()
         torch.save({'loss': loss.detach(), 'grad': values.grad}, Path(output) / f'{rank}.pt')
     finally:
@@ -56,6 +68,20 @@ class ComplementaryAlignmentTests(unittest.TestCase):
             torch.multiprocessing.spawn(worker, args=(str(Path(directory) / 'group'), directory, case),
                                         nprocs=2, join=True)
             return [torch.load(Path(directory) / f'{rank}.pt', weights_only=True) for rank in range(2)]
+
+    def test_class_and_identity_policies_control_eligibility_separately(self):
+        gathered = torch.zeros(6, 3, 3)
+        gathered[:3, 0], gathered[3:, 1] = LEFT, RIGHT
+        metadata = torch.tensor([[1, 0, 0, 0, 7], [1, 0, 0, 1, -1], [1, 0, 0, 3, 11],
+                                 [0, 1, 0, 1, 7], [0, 1, 0, 0, -1], [0, 1, 0, 2, 11]])
+        for cross_ids in (False, True):
+            actual = _rectangular_alignment(gathered, metadata, 0, 1, .4, 'class', cross_ids=cross_ids,
+                                             cross_classes=True, has_ids=True)
+            if cross_ids:
+                expected = expected_loss(LEFT, RIGHT, torch.tensor([[1, 1, 0], [1, 0, 0], [0, 0, 1]], dtype=torch.bool))
+            else:
+                expected = expected_loss(LEFT[:2], RIGHT[:2], torch.tensor([[1, 1], [1, 0]], dtype=torch.bool))
+            torch.testing.assert_close(actual, expected)
 
     @unittest.skipUnless(dist.is_available() and dist.is_gloo_available(), 'Gloo indisponible')
     def test_complementary_views_match_full_reference(self):
@@ -107,6 +133,32 @@ class ComplementaryAlignmentTests(unittest.TestCase):
     @unittest.skipUnless(dist.is_available() and dist.is_gloo_available(), 'Gloo indisponible')
     def test_no_ids_retains_previous_zero_loss(self):
         for case in ('no_ids', 'disjoint', 'disabled'):
+            for row in self.run_workers(case):
+                self.assertEqual(row['loss'].item(), 0)
+                self.assertEqual(row['grad'].count_nonzero().item(), 0)
+
+    @unittest.skipUnless(dist.is_available() and dist.is_gloo_available(), 'Gloo indisponible')
+    def test_unpaired_classes_match_rectangular_reference_and_gradients(self):
+        for case in ('cross_class', 'cross_class_unknown'):
+            with self.subTest(case=case):
+                left, right = LEFT.clone().requires_grad_(), RIGHT[:2].clone().requires_grad_()
+                if case == 'cross_class':
+                    selected = left
+                    positive = torch.tensor([[1, 0], [1, 0], [0, 1]], dtype=torch.bool)
+                else:
+                    selected = left[[0, 2]]
+                    positive = torch.eye(2, dtype=torch.bool)
+                expected = expected_loss(selected, right, positive)
+                expected.backward()
+                result = self.run_workers(case)
+                for row in result:
+                    torch.testing.assert_close(row['loss'], expected.detach())
+                torch.testing.assert_close(result[0]['grad'] / 2, left.grad)
+                torch.testing.assert_close(result[1]['grad'] / 2, right.grad)
+
+    @unittest.skipUnless(dist.is_available() and dist.is_gloo_available(), 'Gloo indisponible')
+    def test_unpaired_classes_need_a_known_matching_class_and_opt_in(self):
+        for case in ('cross_class_disabled', 'cross_class_no_match'):
             for row in self.run_workers(case):
                 self.assertEqual(row['loss'].item(), 0)
                 self.assertEqual(row['grad'].count_nonzero().item(), 0)

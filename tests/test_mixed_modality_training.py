@@ -41,6 +41,29 @@ def make_data(root):
 
 
 class MixedModalityTrainingTests(unittest.TestCase):
+    def test_cross_class_policy_validation_and_resume(self):
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            root = Path(directory)
+            config_path, data = make_data(root)
+            common = ['--threads', '2', 'train', '--config', str(config_path), '--data', str(data),
+                      '--steps', '3', '--batch-size', '2', '--mixed-modalities', '--modality-dropout', '0']
+            with self.assertRaisesRegex(ValueError, 'nécessite le mode class'):
+                main(common + ['--alignment-cross-class-views', '--output', str(root / 'invalid')])
+            config = ChimeraConfig.load(config_path)
+            replace(config, alignment_mode='class').save(config_path)
+            full, split = root / 'full-class', root / 'split-class'
+            main(common + ['--alignment-cross-class-views', '--output', str(full)])
+            main(common + ['--alignment-cross-class-views', '--output', str(split), '--stop-after', '1'])
+            checkpoint = split / 'latest.pt'
+            with self.assertRaisesRegex(ValueError, 'alignment_cross_class_views'):
+                main(common + ['--no-alignment-cross-class-views', '--output', str(split), '--resume', str(checkpoint)])
+            main(common + ['--output', str(split), '--resume', str(checkpoint)])
+            expected, _ = load_checkpoint(full / 'latest.pt')
+            actual, payload = load_checkpoint(checkpoint)
+            self.assertTrue(payload['trainer']['alignment_cross_class_views'])
+            for name, value in expected.state_dict().items():
+                torch.testing.assert_close(value, actual.state_dict()[name], rtol=0, atol=0, msg=name)
+
     def test_mixed_training_validation_and_exact_resume(self):
         with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             root = Path(directory)
@@ -59,6 +82,7 @@ class MixedModalityTrainingTests(unittest.TestCase):
             self.assertTrue(right_payload['trainer']['mixed_modalities'])
             self.assertTrue(right_payload['trainer']['alignment_duplicate_positives'])
             self.assertTrue(right_payload['trainer']['alignment_cross_rank_views'])
+            self.assertFalse(right_payload['trainer']['alignment_cross_class_views'])
             self.assertEqual(left_payload['trainer']['validation_state'], right_payload['trainer']['validation_state'])
             for name, value in left.state_dict().items():
                 torch.testing.assert_close(value, right.state_dict()[name], rtol=0, atol=0, msg=name)
@@ -108,12 +132,14 @@ class MixedModalityTrainingTests(unittest.TestCase):
             checkpoint = legacy / 'latest.pt'
             payload = torch.load(checkpoint, weights_only=False)
             del payload['trainer']['alignment_duplicate_positives']
+            del payload['trainer']['alignment_cross_class_views']
             del payload['trainer']['shared_modality_batches']
             torch.save(payload, checkpoint)
             main(common + ['--output', str(legacy), '--resume', str(checkpoint)])
             expected, _ = load_checkpoint(continuous / 'latest.pt')
             actual, restored = load_checkpoint(checkpoint)
             self.assertFalse(restored['trainer']['alignment_duplicate_positives'])
+            self.assertFalse(restored['trainer']['alignment_cross_class_views'])
             self.assertFalse(restored['trainer']['shared_modality_batches'])
             for name, value in expected.state_dict().items():
                 torch.testing.assert_close(value, actual.state_dict()[name], rtol=0, atol=0, msg=name)

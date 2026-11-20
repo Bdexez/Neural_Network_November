@@ -55,7 +55,7 @@ def alignment_worker(rank, init_file, directory, scenario):
             left = LEFT[rank:rank+1].clone().requires_grad_(rank == 0)
             right = RIGHT[rank:rank+1].clone().requires_grad_(rank == 0)
             vectors, labels = {0:left,1:right}, None
-        mode = 'class' if scenario in ('class','class_unknown') else 'paired'
+        mode = 'class' if scenario in ('class','class_unknown','mismatched_cross_class_views') else 'paired'
         if scenario == 'mismatched_mode':
             mode = 'class' if rank == 1 else 'paired'
         text_view = 'isolated' if scenario == 'mismatched_text_view' and rank == 1 else 'joint'
@@ -70,7 +70,8 @@ def alignment_worker(rank, init_file, directory, scenario):
         try:
             loss = distributed_alignment_loss(vectors, labels, temperature, mode, group=dist.group.WORLD,
                                               text_view=text_view,
-                                              cross_rank_views=scenario == 'mismatched_cross_rank_views' and rank == 1)
+                                              cross_rank_views=scenario == 'mismatched_cross_rank_views' and rank == 1,
+                                              cross_class_views=scenario == 'mismatched_cross_class_views' and rank == 1)
         except ValueError as exc:
             torch.save(dict(error=str(exc)), Path(directory) / f'{rank}.pt')
             return
@@ -183,7 +184,7 @@ class DistributedAlignmentTests(unittest.TestCase):
                     torch.testing.assert_close(result[rank]['right'] / 2, right.grad[section], rtol=1e-6, atol=1e-7)
 
     def test_ranks_reject_mismatched_configuration_before_shape_collectives(self):
-        for scenario in ('mismatched_mode','mismatched_dimension','mismatched_dtype','mismatched_temperature','mismatched_text_view','mismatched_cross_rank_views'):
+        for scenario in ('mismatched_mode','mismatched_dimension','mismatched_dtype','mismatched_temperature','mismatched_text_view','mismatched_cross_rank_views','mismatched_cross_class_views'):
             with self.subTest(scenario=scenario):
                 for result in self.run_workers(scenario):
                     self.assertIn('différents selon les rangs',result['error'])

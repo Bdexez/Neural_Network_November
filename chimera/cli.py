@@ -179,6 +179,8 @@ def main(argv=None):
                           help="Présenter les mêmes lots aux rangs distribués ; restauré à la reprise")
     training.add_argument("--alignment-cross-rank-views", action=argparse.BooleanOptionalAction, default=None,
                           help="Aligner les vues complémentaires de la même ligne entre rangs")
+    training.add_argument("--alignment-cross-class-views", action=argparse.BooleanOptionalAction, default=None,
+                          help="Aligner les vues de même classe entre rangs (mode class distribué)")
     training.add_argument("--alignment-duplicate-positives", action=argparse.BooleanOptionalAction, default=None,
                           help="Traiter les copies d'une ligne comme positives pour l'alignement")
     training.add_argument("--mixed-modalities", action=argparse.BooleanOptionalAction, default=None,

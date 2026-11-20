@@ -30,21 +30,30 @@ class _GatherWithGrad(torch.autograd.Function):
         return gradient[ctx.rank], None
 
 
-def _rectangular_alignment(gathered, metadata, first, second, temperature, mode):
-    """Aligner les vues qui ont une paire de ligne ou une identité commune."""
+def _rectangular_alignment(gathered, metadata, first, second, temperature, mode, *,
+                           cross_ids, cross_classes, has_ids):
+    """Aligner les vues ayant un partenaire selon les règles activées."""
     left_rows = (metadata[:, first] != 0).nonzero(as_tuple=True)[0]
     right_rows = (metadata[:, second] != 0).nonzero(as_tuple=True)[0]
     if left_rows.numel() == 0 or right_rows.numel() == 0:
         return None
     left_ids, right_ids = metadata[left_rows, 4], metadata[right_rows, 4]
     positive = (left_rows[:, None] == right_rows[None, :])
-    positive |= ((left_ids[:, None] == right_ids[None, :])
-                 & (left_ids[:, None] >= 0) & (right_ids[None, :] >= 0))
+    id_matches = ((left_ids[:, None] == right_ids[None, :])
+                  & (left_ids[:, None] >= 0) & (right_ids[None, :] >= 0))
+    if cross_ids:
+        positive |= id_matches
+    if cross_classes:
+        left_labels, right_labels = metadata[left_rows, 3], metadata[right_rows, 3]
+        positive |= ((left_labels[:, None] == right_labels[None, :])
+                     & (left_labels[:, None] != -100) & (right_labels[None, :] != -100))
     left_valid, right_valid = positive.any(-1), positive.any(0)
     left_rows, right_rows = left_rows[left_valid], right_rows[right_valid]
     if max(left_rows.numel(), right_rows.numel()) < 2 or not left_rows.numel() or not right_rows.numel():
         return None
     positive = positive[left_valid][:, right_valid]
+    if has_ids:
+        positive |= id_matches[left_valid][:, right_valid]
     if mode == "class":
         left_labels, right_labels = metadata[left_rows, 3], metadata[right_rows, 3]
         positive |= ((left_labels[:, None] == right_labels[None, :])
@@ -60,7 +69,7 @@ def _rectangular_alignment(gathered, metadata, first, second, temperature, mode)
 
 
 def distributed_alignment_loss(vectors, class_labels, temperature, mode, *, group, text_view="joint", sample_ids=None,
-                               cross_rank_views=False):
+                               cross_rank_views=False, cross_class_views=False):
     """Calculer les paires globales tout en conservant les gradients locaux.
 
     Les vecteurs, déjà normalisés, sont indexés par modalité (0, 1, 2).
@@ -83,6 +92,10 @@ def distributed_alignment_loss(vectors, class_labels, temperature, mode, *, grou
         raise ValueError("sample_ids doit être long [B], avec -1 pour les identités inconnues")
     if type(cross_rank_views) is not bool:
         raise ValueError("cross_rank_views doit être booléen")
+    if type(cross_class_views) is not bool:
+        raise ValueError("cross_class_views doit être booléen")
+    if cross_class_views and mode != "class":
+        raise ValueError("cross_class_views nécessite le mode class")
     if (mode not in ("paired", "class") or text_view not in ("joint", "isolated")
             or not math.isfinite(temperature) or temperature <= 0):
         raise ValueError("Mode, vue textuelle ou température d'alignement invalide")
@@ -92,7 +105,8 @@ def distributed_alignment_loss(vectors, class_labels, temperature, mode, *, grou
     world = dist.get_world_size(group)
     temperature_bits = struct.unpack("!q", struct.pack("!d", float(temperature)))[0]
     specification = torch.tensor([batch, dim, dtype_codes[sample.dtype], int(mode == "class"),
-                                  int(text_view == "isolated"), temperature_bits, int(cross_rank_views)],
+                                  int(text_view == "isolated"), temperature_bits, int(cross_rank_views),
+                                  int(cross_class_views)],
                                  dtype=torch.long, device=sample.device)
     specifications = [torch.empty_like(specification) for _ in range(world)]
     dist.all_gather(specifications, specification, group=group)
@@ -123,8 +137,10 @@ def distributed_alignment_loss(vectors, class_labels, temperature, mode, *, grou
     losses = []
     for first in range(3):
         for second in range(first + 1, 3):
-            if has_ids and cross_rank_views:
-                loss = _rectangular_alignment(gathered, all_metadata, first, second, temperature, mode)
+            if (has_ids and cross_rank_views) or cross_class_views:
+                loss = _rectangular_alignment(gathered, all_metadata, first, second, temperature, mode,
+                                              cross_ids=has_ids and cross_rank_views,
+                                              cross_classes=cross_class_views, has_ids=has_ids)
                 if loss is not None:
                     losses.append(loss)
                 continue

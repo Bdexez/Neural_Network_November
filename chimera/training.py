@@ -262,6 +262,14 @@ def train(args, config):
                                            if requested_cross_views is None else requested_cross_views)
     if args.alignment_cross_rank_views and not args.alignment_duplicate_positives:
         raise ValueError("alignment_cross_rank_views nécessite alignment_duplicate_positives")
+    previous_cross_classes = previous.get("alignment_cross_class_views", False)
+    requested_cross_classes = getattr(args, "alignment_cross_class_views", None)
+    if args.resume and requested_cross_classes is not None and requested_cross_classes != previous_cross_classes:
+        raise ValueError(f"Reprise : alignment_cross_class_views diffère du checkpoint ({previous_cross_classes!r})")
+    args.alignment_cross_class_views = (previous_cross_classes if requested_cross_classes is None
+                                        else requested_cross_classes)
+    if args.alignment_cross_class_views and config.alignment_mode != "class":
+        raise ValueError("alignment_cross_class_views nécessite le mode class")
     previous_shared_batches = previous.get("shared_modality_batches", False)
     requested_shared_batches = getattr(args, "shared_modality_batches", None)
     if args.resume:
@@ -313,6 +321,7 @@ def train(args, config):
     trainer["mixed_modalities"] = args.mixed_modalities
     trainer["alignment_duplicate_positives"] = args.alignment_duplicate_positives
     trainer["alignment_cross_rank_views"] = args.alignment_cross_rank_views
+    trainer["alignment_cross_class_views"] = args.alignment_cross_class_views
     trainer["shared_modality_batches"] = args.shared_modality_batches
     trainer["shared_modality_batch_interval"] = args.shared_modality_batch_interval
     trainer["initialization"] = previous.get("initialization", initialization)
@@ -473,6 +482,8 @@ def train(args, config):
                     series_statistics[name] = series_statistics.get(name, 0) + value
             if args.alignment_cross_rank_views:
                 batch["alignment_cross_rank_views"] = True
+            if args.alignment_cross_class_views:
+                batch["alignment_cross_class_views"] = True
             return batch
 
         batches = (prepare_microbatch(micro) for micro in range(args.accumulation))

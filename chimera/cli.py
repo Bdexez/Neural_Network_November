@@ -35,6 +35,26 @@ def same_file(first, second):
         return False
 
 
+def audit_series_calibration(data, dataset_sha256, references, *, output):
+    """Comparer les historiques JSON exacts aux jeux d'ajustement fournis."""
+    if not references:
+        return
+    for name, (path, digest) in references.items():
+        if digest is None:
+            raise ValueError(f"Empreinte du jeu {name} absente de l'artefact")
+    paths = {"calibration": data, **{name: path for name, (path, _) in references.items()}}
+    report = audit_splits(paths, fields=("series",), output=output, max_examples=1)
+    if report["splits"]["calibration"]["sha256"] != dataset_sha256:
+        raise ValueError("Le jeu de calibration a changé pendant l'audit")
+    for name, (_, digest) in references.items():
+        if report["splits"][name]["sha256"] != digest:
+            raise ValueError(f"Le jeu {name} ne correspond pas à l'empreinte de son artefact")
+    for pair in report["pairs"]:
+        if pair["shared_unique_records"]:
+            raise ValueError(f"Historiques partagés entre {pair['left']} et {pair['right']} : "
+                             f"{pair['shared_unique_records']} valeur(s) distincte(s)")
+
+
 @contextmanager
 def prediction_stream(path):
     if path is None:
@@ -202,6 +222,8 @@ def main(argv=None):
     set_fit.add_argument("--checkpoint", required=True)
     set_fit.add_argument("--series-classifier", required=True)
     set_fit.add_argument("--series-probability")
+    set_fit.add_argument("--classifier-data", help="Jeu d'ajustement de la tête, à auditer")
+    set_fit.add_argument("--probability-data", help="Jeu d'ajustement de la température, à auditer")
     set_fit.add_argument("--data", required=True)
     set_fit.add_argument("--output", required=True)
     set_fit.add_argument("--coverage", type=float, default=.9)
@@ -213,6 +235,7 @@ def main(argv=None):
     prob_fit = commands.add_parser("calibrate-series-probability", help="Calibrer les scores d'une tête temporelle")
     prob_fit.add_argument("--checkpoint", required=True)
     prob_fit.add_argument("--series-classifier", required=True)
+    prob_fit.add_argument("--classifier-data", help="Jeu d'ajustement de la tête, à auditer")
     prob_fit.add_argument("--data", required=True, help="JSONL de calibration distinct avec class_label")
     prob_fit.add_argument("--output", required=True)
     prob_fit.add_argument("--batch-size", type=int, default=32)
@@ -456,7 +479,10 @@ def main(argv=None):
     elif args.command == "calibrate-series-set":
         if args.batch_size < 1:
             parser.error("batch-size doit être > 0")
-        sources = (args.data, args.checkpoint, args.series_classifier, args.series_probability)
+        if args.probability_data and not args.series_probability:
+            parser.error("probability-data nécessite series-probability")
+        sources = (args.data, args.checkpoint, args.series_classifier, args.series_probability,
+                   args.classifier_data, args.probability_data)
         if any(same_file(args.output, source) for source in sources if source):
             parser.error("La sortie doit être distincte des fichiers d'entrée")
         model, _ = load_checkpoint(args.checkpoint, args.device)
@@ -468,6 +494,12 @@ def main(argv=None):
         dataset = JointDataset(args.data, model.config)
         if dataset.references_image(args.output):
             parser.error("La sortie doit être distincte des images d'entrée")
+        references = {}
+        if args.classifier_data:
+            references["tête"] = (args.classifier_data, classifier.dataset_sha256)
+        if args.probability_data:
+            references["température"] = (args.probability_data, probability.dataset_sha256)
+        audit_series_calibration(args.data, dataset.fingerprint, references, output=args.output)
         loader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=collate_records,
                             generator=torch.Generator().manual_seed(0))
         fitted = fit_series_set(model, classifier, loader, amp=args.amp, coverage=args.coverage,
@@ -483,7 +515,8 @@ def main(argv=None):
     elif args.command == "calibrate-series-probability":
         if args.batch_size < 1:
             parser.error("batch-size doit être > 0")
-        if any(same_file(args.output, source) for source in (args.data, args.checkpoint, args.series_classifier)):
+        sources = (args.data, args.checkpoint, args.series_classifier, args.classifier_data)
+        if any(same_file(args.output, source) for source in sources if source):
             parser.error("La sortie doit être distincte des fichiers d'entrée")
         model, _ = load_checkpoint(args.checkpoint, args.device)
         classifier = SeriesClassifier.load(args.series_classifier)
@@ -491,6 +524,8 @@ def main(argv=None):
         dataset = JointDataset(args.data, model.config)
         if dataset.references_image(args.output):
             parser.error("La sortie doit être distincte des images d'entrée")
+        references = {"tête": (args.classifier_data, classifier.dataset_sha256)} if args.classifier_data else {}
+        audit_series_calibration(args.data, dataset.fingerprint, references, output=args.output)
         loader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=collate_records,
                             generator=torch.Generator().manual_seed(0))
         probability = fit_series_probability(model, classifier, loader, amp=args.amp,

@@ -152,9 +152,10 @@ class SeriesSetTests(unittest.TestCase):
                     class_label=batch['class_labels'][i].item(), future=batch['forecast_targets'][i].tolist())) for i in range(count)))
             main(['--threads','2','refine-series-classifier','--checkpoint',str(checkpoint),'--data',str(train),'--output',str(head)])
             main(['calibrate-series-probability','--checkpoint',str(checkpoint),'--series-classifier',str(head),
-                  '--data',str(tuning),'--output',str(temp)])
+                  '--data',str(tuning),'--classifier-data',str(train),'--output',str(temp)])
             fit_args = ['calibrate-series-set','--checkpoint',str(checkpoint),'--series-classifier',str(head),
-                        '--series-probability',str(temp),'--data',str(calib),'--output',str(sets)]
+                        '--series-probability',str(temp),'--data',str(calib),'--output',str(sets),
+                        '--classifier-data',str(train),'--probability-data',str(tuning)]
             main(fit_args)
             common = ['--checkpoint',str(checkpoint),'--series-classifier',str(head),'--data',str(test)]
             main(['predict',*common,'--output',str(predictions)])
@@ -199,9 +200,25 @@ class SeriesSetTests(unittest.TestCase):
             self.assertEqual(empty_intervals['series_prediction_set_coverage_by_class'], [None] * config.num_classes)
             saved = sets.read_bytes()
             for reused in (train,tuning):
-                with self.assertRaisesRegex(ValueError,'identique'):
+                with self.assertRaisesRegex(ValueError,'identique|partagés'):
                     main([*fit_args,'--data',str(reused)])
                 self.assertEqual(sets.read_bytes(),saved)
+            contaminated = root / 'contaminated.jsonl'
+            contaminated_rows = [json.loads(line) for line in calib.read_text().splitlines()]
+            contaminated_rows[0]['series'] = json.loads(train.read_text().splitlines()[0])['series']
+            contaminated_rows[0]['class_label'] = (contaminated_rows[0]['class_label'] + 1) % config.num_classes
+            contaminated.write_text('\n'.join(json.dumps(row) for row in contaminated_rows))
+            with self.assertRaisesRegex(ValueError, 'Historiques partagés'):
+                main([*fit_args, '--data', str(contaminated)])
+            self.assertEqual(sets.read_bytes(), saved)
+            with self.assertRaisesRegex(ValueError, 'empreinte'):
+                main([*fit_args, '--classifier-data', str(tuning)])
+            self.assertEqual(sets.read_bytes(), saved)
+            with self.assertRaises(SystemExit):
+                main([*fit_args, '--output', str(train)])
+            with self.assertRaises(SystemExit):
+                main(['calibrate-series-set','--checkpoint',str(checkpoint),'--series-classifier',str(head),
+                      '--data',str(calib),'--probability-data',str(tuning),'--output',str(sets)])
             with self.assertRaises(ValueError):
                 main(['predict',*common,'--series-set',str(sets)])
             with self.assertRaises(SystemExit):

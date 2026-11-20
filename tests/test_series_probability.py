@@ -159,7 +159,8 @@ class SeriesProbabilityTests(unittest.TestCase):
             main(["--threads", "2", "refine-series-classifier", "--checkpoint", str(checkpoint),
                   "--data", str(train), "--output", str(head)])
             calibration_args = ["--threads", "2", "calibrate-series-probability", "--checkpoint", str(checkpoint),
-                                "--series-classifier", str(head), "--data", str(tuning), "--output", str(calibration)]
+                                "--series-classifier", str(head), "--data", str(tuning), "--output", str(calibration),
+                                "--classifier-data", str(train)]
             main(calibration_args)
             fitted = SeriesProbabilityCalibration.load(calibration)
             self.assertEqual(fitted.examples, 64)
@@ -183,9 +184,21 @@ class SeriesProbabilityTests(unittest.TestCase):
                   "--series-classifier", str(head), "--series-probability", str(calibration), "--output", str(report)])
             self.assertTrue(json.loads(report.read_text())["series_probability_data_reused"])
             saved = calibration.read_bytes()
-            with self.assertRaisesRegex(ValueError, "identique"):
+            with self.assertRaisesRegex(ValueError, "identique|partagés"):
                 main([*calibration_args, "--data", str(train)])
             self.assertEqual(calibration.read_bytes(), saved)
+            contaminated = root / "contaminated.jsonl"
+            rows = [json.loads(line) for line in tuning.read_text().splitlines()]
+            rows[0]["series"] = json.loads(train.read_text().splitlines()[0])["series"]
+            rows[0]["class_label"] = (rows[0]["class_label"] + 1) % config.num_classes
+            contaminated.write_text("\n".join(json.dumps(row) for row in rows))
+            with self.assertRaisesRegex(ValueError, "Historiques partagés"):
+                main([*calibration_args, "--data", str(contaminated)])
+            with self.assertRaisesRegex(ValueError, "empreinte"):
+                main([*calibration_args, "--classifier-data", str(tuning)])
+            self.assertEqual(calibration.read_bytes(), saved)
+            with self.assertRaises(SystemExit):
+                main([*calibration_args, "--output", str(train)])
             with self.assertRaises(SystemExit):
                 main([*calibration_args, "--output", str(head)])
             with self.assertRaises(SystemExit):

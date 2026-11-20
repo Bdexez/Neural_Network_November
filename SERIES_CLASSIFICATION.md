@@ -50,13 +50,17 @@ Une température facultative transforme les scores de la tête en probabilités 
 
 Le fichier de calibration est distinct de la tête et lié aux SHA-256 exacts du checkpoint et de la tête, ainsi qu'à leur précision AMP. Lorsque l'empreinte d'ajustement est disponible, la commande refuse un fichier de calibration dont les octets JSONL sont identiques au jeu d'ajustement de la tête ; des fichiers différents peuvent toutefois partager des exemples. Utiliser des jeux distincts pour ajuster la tête, calibrer la température et tester les probabilités. Les lignes sans étiquette sont ignorées ; au moins une étiquette observée est nécessaire.
 
+L'option facultative `--classifier-data` fournit le JSONL d'ajustement de la tête : la commande vérifie son empreinte enregistrée, puis refuse tout historique `series` identique entre ce fichier et celui de calibration, même si les étiquettes ou les futurs diffèrent. La commande d'ensemble accepte aussi `--probability-data` pour comparer le jeu de température ; si les deux références sont fournies, toutes les paires sont comparées. Chaque référence doit correspondre exactement à l'empreinte de son artefact. L'audit conserve en mémoire des empreintes de tous les historiques distincts : son coût augmente avec la taille des jeux. Sans ces options, seule l'identité du fichier entier est détectée.
+
+Ces comparaisons exactes ne détectent pas toutes les fuites : notamment, deux fenêtres différentes peuvent partager des pas temporels, et des transformations ou arrondis peuvent masquer une répétition. Auditer séparément les intervalles temporels avec [`audit-splits`](README.md#données-et-api) lorsque les métadonnées sont disponibles ; inclure aussi le jeu de test dans cet audit. Aucun de ces contrôles ne prouve l'indépendance statistique.
+
 L'ajustement ne conserve pas les historiques, mais stocke les scores des exemples étiquetés pour chercher la température : sa mémoire croît avec le produit du nombre d'exemples et du nombre de classes.
 
 ```bash
 .venv/bin/python -m chimera calibrate-series-probability \
   --checkpoint runs/joint-affine-pilot/control/latest.pt \
   --series-classifier runs/series-classifier.json --data data/series-probability-calibration.jsonl \
-  --output runs/series-probability.json
+  --classifier-data data/series-head-train.jsonl --output runs/series-probability.json
 
 .venv/bin/python -m chimera evaluate \
   --checkpoint runs/joint-affine-pilot/control/latest.pt --data data/series-head-test.jsonl \
@@ -140,7 +144,8 @@ Une tête temporelle figée peut produire un ensemble de classes plutôt qu'une 
 ```bash
 .venv/bin/python -m chimera.cli calibrate-series-set \
   --checkpoint model.pt --series-classifier head.json --series-probability temperature.json \
-  --data ensemble-calibration.jsonl --coverage 0.9 --method aps --output ensemble.json
+  --data ensemble-calibration.jsonl --coverage 0.9 --method aps --output ensemble.json \
+  --classifier-data head-train.jsonl --probability-data temperature-calibration.jsonl
 .venv/bin/python -m chimera.cli predict \
   --checkpoint model.pt --series-classifier head.json --series-probability temperature.json \
   --series-set ensemble.json --data test.jsonl --output predictions.jsonl

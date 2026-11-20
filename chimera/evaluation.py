@@ -10,6 +10,7 @@ from .binomial import wilson_interval
 from .routing_metrics import summarize_expert_usage
 from .probability_metrics import ProbabilityMetrics
 from .series_probability import log_probabilities
+from .streaming_rmse import StreamingRMSE
 
 
 def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=None, series_probability=None, series_set=None, iid_intervals=False, series_gate=None, series_gate_guard=None):
@@ -54,7 +55,8 @@ def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=
     set_class_counts = torch.zeros(model.config.num_classes, dtype=torch.long)
     set_class_covered = torch.zeros_like(set_class_counts)
     complete_forecasts = raw_joint_covered = calibrated_joint_covered = 0
-    absolute = squared = covered = width = 0.0
+    absolute = covered = width = 0.0
+    rmse = StreamingRMSE()
     horizon_error = torch.zeros(model.config.forecast_horizon, dtype=torch.float64)
     horizon_count = torch.zeros_like(horizon_error)
     feature_count = torch.zeros(model.config.series_features, dtype=torch.float64)
@@ -203,7 +205,7 @@ def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=
                     median = predictions[..., model.config.quantiles.index(0.5)]
                     error = torch.where(observed, median - target, 0)
                     absolute += error.abs().sum().item()
-                    squared += error.square().sum().item()
+                    rmse.update(error)
                     horizon_error += error.abs().sum((0, 2)).cpu()
                     horizon_count += observed.sum((0, 2)).cpu()
                     feature_count += observed.sum((0, 1)).cpu()
@@ -363,7 +365,7 @@ def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=
             result["forecast_observations_by_feature"] = feature_count.long().tolist()
             result["forecast_observations_by_horizon_feature"] = cell_count.long().tolist()
             result["forecast_mae"] = absolute / forecast_count if forecast_count else None
-            result["forecast_rmse"] = math.sqrt(squared / forecast_count) if forecast_count else None
+            result["forecast_rmse"] = rmse.result(forecast_count)
             result["forecast_mae_by_horizon"] = by_horizon(horizon_error)
             result["forecast_mae_by_feature"] = by_feature(feature_error)
             result["forecast_mae_by_horizon_feature"] = by_cell(cell_error)

@@ -17,6 +17,7 @@ from .data import JointDataset, collate_records, synthetic_batch
 from .forecast_adapter import fit_forecast_adapter
 from .embedding_search import search_embeddings
 from .model import Chimera
+from .retrieval_evaluation import evaluate_retrieval
 from .series_classifier import SeriesClassifier, fit_series_classifier
 from .series_gate import SeriesGate, fit_series_gate
 from .series_gate_guard import SeriesGateGuard, fit_series_gate_guard
@@ -224,6 +225,17 @@ def main(argv=None):
     search.add_argument("--candidate-batch-size", type=int, default=1024)
     search.add_argument("--exclude-self", action="store_true")
     search.add_argument("--output", help="Fichier JSONL des voisins ; sinon stdout")
+    retrieval = commands.add_parser("evaluate-retrieval", help="Mesurer la recherche sur des pertinences explicites")
+    retrieval.add_argument("--queries", required=True)
+    retrieval.add_argument("--candidates", required=True)
+    retrieval.add_argument("--relevance", required=True)
+    retrieval.add_argument("--query-modality", choices=("text", "image", "series"), required=True)
+    retrieval.add_argument("--candidate-modality", choices=("text", "image", "series"), required=True)
+    retrieval.add_argument("--top-k", type=int, default=5)
+    retrieval.add_argument("--query-batch-size", type=int, default=16)
+    retrieval.add_argument("--candidate-batch-size", type=int, default=1024)
+    retrieval.add_argument("--exclude-self", action="store_true")
+    retrieval.add_argument("--output", help="Rapport JSON ; sinon stdout")
     export = commands.add_parser("export", help="Exporter les poids sans l'optimiseur pour l'inférence")
     export.add_argument("--checkpoint", required=True)
     export.add_argument("--output", required=True)
@@ -583,6 +595,20 @@ def main(argv=None):
                 count += 1
         if args.output:
             print(f"{count} recherches écrites dans {args.output}")
+    elif args.command == "evaluate-retrieval":
+        if min(args.top_k, args.query_batch_size, args.candidate_batch_size) < 1:
+            parser.error("top-k et les tailles de lot doivent être >= 1")
+        if args.output and any(same_file(args.output, path) for path in
+                               (args.queries, args.candidates, args.relevance)):
+            parser.error("Le rapport doit être distinct des fichiers d'entrée")
+        report = evaluate_retrieval(args.queries, args.candidates, args.relevance,
+                                    args.query_modality, args.candidate_modality, top_k=args.top_k,
+                                    query_batch_size=args.query_batch_size,
+                                    candidate_batch_size=args.candidate_batch_size, exclude_self=args.exclude_self)
+        with prediction_stream(args.output) as stream:
+            stream.write(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
+        if args.output:
+            print(f"Évaluation écrite dans {args.output}")
     elif args.command == "export":
         if args.stable_rms_norm and same_file(args.output, args.checkpoint):
             parser.error("Le checkpoint stable doit être distinct du checkpoint source")

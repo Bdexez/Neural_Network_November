@@ -67,14 +67,17 @@ def alignment_worker(rank, init_file, directory, scenario):
             temperature = .4 if rank == 1 else .3
         else:
             temperature = .3
+        cross_rank = scenario == 'mismatched_cross_rank_views' and rank == 1
+        cross_class = ((scenario in ('mismatched_cross_class_views', 'mismatched_cross_class_views_paired')
+                        and rank == 1) or scenario == 'invalid_cross_class_views_paired')
+        if (scenario == 'invalid_cross_rank_type' and rank == 1) or scenario == 'all_invalid_cross_rank_type':
+            cross_rank = 1
+        if (scenario == 'invalid_cross_class_type' and rank == 1) or scenario == 'all_invalid_cross_class_type':
+            cross_class = 1
         try:
             loss = distributed_alignment_loss(vectors, labels, temperature, mode, group=dist.group.WORLD,
                                               text_view=text_view,
-                                              cross_rank_views=scenario == 'mismatched_cross_rank_views' and rank == 1,
-                                              cross_class_views=(scenario in ('mismatched_cross_class_views',
-                                                                              'mismatched_cross_class_views_paired')
-                                                                 and rank == 1)
-                                              or scenario == 'invalid_cross_class_views_paired')
+                                              cross_rank_views=cross_rank, cross_class_views=cross_class)
         except ValueError as exc:
             torch.save(dict(error=str(exc)), Path(directory) / f'{rank}.pt')
             return
@@ -120,9 +123,14 @@ def model_worker(rank, init_file, directory, scenario, mode):
         seen = []
         for i, section in enumerate(sections):
             part = {key:value[section] for key,value in batch.items()}
-            if scenario in ('mismatched_cross_class_views_paired', 'invalid_cross_class_views_paired'):
+            if scenario in ('mismatched_cross_class_views_paired', 'invalid_cross_class_views_paired',
+                            'invalid_cross_rank_type', 'invalid_cross_class_type'):
+                cross_rank = 1 if scenario == 'invalid_cross_rank_type' and rank == 1 else False
+                cross_class = (1 if scenario == 'invalid_cross_class_type' and rank == 1 else
+                               scenario in ('mismatched_cross_class_views_paired', 'invalid_cross_class_views_paired')
+                               and (rank == 1 or scenario.startswith('invalid')))
                 try:
-                    wrapped(**part, alignment_cross_class_views=(rank == 1 or scenario.startswith('invalid')))
+                    wrapped(**part, alignment_cross_rank_views=cross_rank, alignment_cross_class_views=cross_class)
                 except ValueError as exc:
                     torch.save(dict(error=str(exc)), Path(directory)/f'model{rank}.pt')
                     return
@@ -194,7 +202,7 @@ class DistributedAlignmentTests(unittest.TestCase):
                     torch.testing.assert_close(result[rank]['right'] / 2, right.grad[section], rtol=1e-6, atol=1e-7)
 
     def test_ranks_reject_mismatched_configuration_before_shape_collectives(self):
-        for scenario in ('mismatched_mode','mismatched_dimension','mismatched_dtype','mismatched_temperature','mismatched_text_view','mismatched_cross_rank_views','mismatched_cross_class_views','mismatched_cross_class_views_paired'):
+        for scenario in ('mismatched_mode','mismatched_dimension','mismatched_dtype','mismatched_temperature','mismatched_text_view','mismatched_cross_rank_views','mismatched_cross_class_views','mismatched_cross_class_views_paired','invalid_cross_rank_type','invalid_cross_class_type'):
             with self.subTest(scenario=scenario):
                 for result in self.run_workers(scenario):
                     self.assertIn('différents selon les rangs',result['error'])
@@ -203,9 +211,17 @@ class DistributedAlignmentTests(unittest.TestCase):
         for result in self.run_workers('invalid_cross_class_views_paired'):
             self.assertIn('nécessite le mode class', result['error'])
 
+    def test_invalid_boolean_types_are_rejected_on_all_ranks(self):
+        for scenario, name in (('all_invalid_cross_rank_type', 'cross_rank_views'),
+                               ('all_invalid_cross_class_type', 'cross_class_views')):
+            for result in self.run_workers(scenario):
+                self.assertIn(f'{name} doit être booléen', result['error'])
+
     def test_model_synchronizes_class_option_validation(self):
         for scenario, message in (('mismatched_cross_class_views_paired', 'différents selon les rangs'),
-                                  ('invalid_cross_class_views_paired', 'nécessite le mode class')):
+                                  ('invalid_cross_class_views_paired', 'nécessite le mode class'),
+                                  ('invalid_cross_rank_type', 'différents selon les rangs'),
+                                  ('invalid_cross_class_type', 'différents selon les rangs')):
             with self.subTest(scenario=scenario):
                 for result in self.model_results(scenario):
                     self.assertIn(message, result['error'])
@@ -234,6 +250,9 @@ class DistributedAlignmentTests(unittest.TestCase):
         old = config.to_dict()
         del old['alignment_scope']
         self.assertEqual(ChimeraConfig.from_dict(old).alignment_scope,'local')
+        for argument in ('alignment_cross_rank_views', 'alignment_cross_class_views'):
+            with self.assertRaisesRegex(ValueError, 'doit être booléen'):
+                local(**model_batch(config), **{argument: 1})
         with self.assertRaises(ValueError):
             replace(config,alignment_scope='invalid')
 

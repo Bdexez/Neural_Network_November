@@ -230,13 +230,13 @@ class Chimera(nn.Module):
         cache: ModelCache | None = None, use_cache=False,
     ) -> ChimeraOutput:
         batch = self._validate(input_ids, images, series, attention_mask, series_mask, cache)
-        if type(alignment_cross_rank_views) is not bool:
-            raise ValueError("alignment_cross_rank_views doit être booléen")
-        if type(alignment_cross_class_views) is not bool:
-            raise ValueError("alignment_cross_class_views doit être booléen")
         distributed_alignment = (self.config.alignment_scope == "global" and self.training and dist.is_available()
                                  and dist.is_initialized() and dist.get_world_size() > 1)
-        if alignment_cross_class_views and self.config.alignment_mode != "class" and not distributed_alignment:
+        if type(alignment_cross_rank_views) is not bool and not distributed_alignment:
+            raise ValueError("alignment_cross_rank_views doit être booléen")
+        if type(alignment_cross_class_views) is not bool and not distributed_alignment:
+            raise ValueError("alignment_cross_class_views doit être booléen")
+        if not distributed_alignment and alignment_cross_class_views and self.config.alignment_mode != "class":
             raise ValueError("alignment_cross_class_views nécessite le mode class")
         if use_cache and (self.training or input_ids is None):
             raise ValueError("use_cache nécessite eval() et des tokens texte")

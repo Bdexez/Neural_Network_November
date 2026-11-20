@@ -12,7 +12,7 @@ from .probability_metrics import ProbabilityMetrics
 from .series_probability import log_probabilities
 
 
-def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=None, series_probability=None, series_set=None, iid_intervals=False, series_gate=None):
+def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=None, series_probability=None, series_set=None, iid_intervals=False, series_gate=None, series_gate_guard=None):
     if amp not in ("none", "bf16", "fp16"):
         raise ValueError("amp doit être none, bf16 ou fp16")
     if calibration is not None:
@@ -31,6 +31,10 @@ def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=
         if series_classifier is None:
             raise ValueError("La porte nécessite une tête temporelle")
         series_gate.validate(series_classifier, amp=amp)
+    if series_gate_guard is not None:
+        if series_gate is None or series_classifier is None:
+            raise ValueError("La protection nécessite une porte et une tête temporelles")
+        series_gate_guard.validate(series_gate, series_classifier, amp=amp)
     was_training = model.training
     model.eval()
     device = next(model.parameters()).device
@@ -44,6 +48,7 @@ def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=
     probability_calibrated = ProbabilityMetrics() if series_probability is not None else None
     gate_examples = gate_selected = gate_labeled = gate_correct = 0
     gate_selected_labeled = gate_selected_correct = 0
+    gate_unguarded_correct = gate_prevented = gate_harms = gate_benefits = 0
     set_examples = set_size = set_singletons = set_labeled = set_covered = 0
     set_labeled_singletons = set_correct_singletons = 0
     set_class_counts = torch.zeros(model.config.num_classes, dtype=torch.long)
@@ -111,9 +116,17 @@ def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=
                 with autocast():
                     output = model(**batch)
                     series_scores = series_classifier.scores(model, batch) if series_classifier is not None else None
-                gate_predictions = gate_choice = None
+                gate_predictions = gate_choice = unguarded_predictions = None
                 if series_gate is not None:
-                    gate_predictions, gate_choice, _ = series_gate.choose(batch, output.classification_logits, series_scores)
+                    unguarded_predictions, gate_choice, advantage = series_gate.choose(
+                        batch, output.classification_logits, series_scores)
+                    gate_predictions = unguarded_predictions
+                    if series_gate_guard is not None:
+                        guarded_choice = series_gate_guard.select(advantage)
+                        gate_prevented += (gate_choice & ~guarded_choice).sum().item()
+                        gate_choice = guarded_choice
+                        gate_predictions = torch.where(gate_choice, series_scores.argmax(-1),
+                                                       output.classification_logits.argmax(-1))
                     gate_examples += gate_choice.numel()
                     gate_selected += gate_choice.sum().item()
                 set_mask = None
@@ -151,6 +164,12 @@ def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=
                         gate_correct += ((gate_predictions == labels) & observed).sum().item()
                         gate_selected_labeled += (gate_choice & observed).sum().item()
                         gate_selected_correct += ((gate_predictions == labels) & gate_choice & observed).sum().item()
+                        if series_gate_guard is not None:
+                            gate_unguarded_correct += ((unguarded_predictions == labels) & observed).sum().item()
+                            base_correct = output.classification_logits.argmax(-1) == labels
+                            head_correct = series_scores.argmax(-1) == labels
+                            gate_harms += (gate_choice & base_correct & ~head_correct & observed).sum().item()
+                            gate_benefits += (gate_choice & ~base_correct & head_correct & observed).sum().item()
                     if set_mask is not None and observed.any():
                         selected = set_mask[observed]
                         observed_labels = labels[observed]
@@ -283,6 +302,15 @@ def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=
                           series_gate_head_selected_labeled=gate_selected_labeled,
                           series_gate_head_selected_accuracy=(gate_selected_correct / gate_selected_labeled
                                                               if gate_selected_labeled else None))
+        if series_gate_guard is not None:
+            result.update(series_gate_guard_max_harm=series_gate_guard.max_harm,
+                          series_gate_guard_threshold=series_gate_guard.threshold,
+                          series_gate_guard_unguarded_accuracy=(gate_unguarded_correct / gate_labeled
+                                                                 if gate_labeled else None),
+                          series_gate_guard_prevented_selection_rate=(gate_prevented / gate_examples
+                                                                      if gate_examples else None),
+                          series_gate_guard_harm_rate=gate_harms / gate_labeled if gate_labeled else None,
+                          series_gate_guard_benefit_rate=gate_benefits / gate_labeled if gate_labeled else None)
         if series_set is not None:
             result.update(series_prediction_set_method=series_set.method,
                           series_prediction_set_scope=series_set.scope,
@@ -306,6 +334,9 @@ def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=
                 intervals["series_gate_accuracy"] = wilson_interval(gate_correct, gate_labeled)
                 intervals["series_gate_head_selected_accuracy"] = wilson_interval(
                     gate_selected_correct, gate_selected_labeled)
+            if series_gate_guard is not None:
+                intervals["series_gate_guard_harm_rate"] = wilson_interval(gate_harms, gate_labeled)
+                intervals["series_gate_guard_benefit_rate"] = wilson_interval(gate_benefits, gate_labeled)
             if series_set is not None:
                 intervals["series_prediction_set_coverage"] = wilson_interval(set_covered, set_labeled)
                 intervals["series_prediction_set_coverage_by_class"] = [

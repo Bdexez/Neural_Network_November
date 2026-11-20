@@ -247,3 +247,31 @@ La porte améliore fortement certains décalages, mais régresse sur les donnée
 .venv/bin/python tools/benchmark_series_gate.py \
   --checkpoint runs/joint-affine-pilot/control/latest.pt --output runs/series-gate-study.json
 ```
+
+## Protection de la porte sur une distribution de référence
+
+Une protection facultative relève le seuil de la porte pour limiter les cas où elle choisit une tête erronée alors que le modèle de base avait raison. Elle utilise un **cinquième jeu étiqueté**, réservé à cette calibration et représentatif de la distribution à protéger :
+
+```bash
+.venv/bin/python -m chimera calibrate-series-gate-guard \
+  --checkpoint model.pt --series-classifier head.json --series-gate gate.json \
+  --data reference.jsonl --max-harm 0.01 --output guard.json \
+  --classifier-data head-train.jsonl --gate-data gate-train.jsonl \
+  --gate-validation-data gate-validation.jsonl
+.venv/bin/python -m chimera predict --checkpoint model.pt --series-classifier head.json \
+  --series-gate gate.json --series-gate-guard guard.json --data test.jsonl --output predictions.jsonl
+.venv/bin/python -m chimera evaluate --checkpoint model.pt --series-classifier head.json \
+  --series-gate gate.json --series-gate-guard guard.json --data test.jsonl \
+  --classifier-data head-train.jsonl --gate-data gate-train.jsonl \
+  --gate-validation-data gate-validation.jsonl --guard-data reference.jsonl --output report.json
+```
+
+Pour chaque exemple étiqueté, le score vaut l'avantage estimé par la porte si la tête aggrave la prédiction, et moins l'infini sinon. Pour un risque `α` fixé avant calibration et `n` exemples étiquetés, le seuil est le maximum du seuil d'origine et du score de rang `ceil((n+1) × (1−α))`. La tête est choisie seulement pour un avantage **strictement supérieur** au seuil ; les égalités restent au modèle de base. Si le rang dépasse `n`, la protection choisit toujours le modèle de base et son seuil est `null`. Les étiquettes absentes ou égales à `-100` sont ignorées.
+
+Avec le modèle, la tête, la porte et `α` fixés avant calibration, si les exemples étiquetés de référence et le futur exemple sont échangeables conditionnellement à ces éléments, la probabilité que la protection introduise une erreur supplémentaire est au plus `α`, en moyenne sur le tirage du jeu de calibration et du futur exemple. En conséquence, l'accuracy attendue de la porte protégée ne peut être inférieure à celle du modèle de base de plus de `α` sur cette même distribution. Cette construction utilise un quantile conforme pour une perte binaire monotone, dans l'esprit du [contrôle conforme du risque](https://arxiv.org/abs/2208.02814).
+
+Cette garantie est **marginale** : elle ne garantit pas le risque conditionnel pour un artefact de calibration donné, une classe, une longueur de série, les exemples non étiquetés ou une distribution transformée. Elle ne contrôle pas non plus la proportion d'erreurs parmi les seuls exemples routés vers la tête. Une dépendance temporelle, une sélection des étiquettes ou une sélection du seuil après inspection du jeu de référence peuvent invalider les hypothèses.
+
+L'artefact lie le seuil aux empreintes exactes du checkpoint, de la tête et de la porte, vérifie aussi le contenu canonique de la tête et de la porte en mémoire, et conserve leur précision AMP ; il enregistre les effectifs, erreurs supplémentaires, taille des lots, device et version de PyTorch pendant la calibration. La commande refuse les fichiers identiques aux jeux de la tête ou de la porte. Les références facultatives `--classifier-data`, `--gate-data` et `--gate-validation-data` ajoutent un audit des historiques exacts et vérifient leurs empreintes ; elles ne détectent pas tous les chevauchements temporels. `evaluate` peut également recevoir `--guard-data` pour auditer le jeu de référence contre le jeu de test.
+
+L'évaluation rapporte l'accuracy avec et sans protection, la fréquence des sélections empêchées, ainsi que `series_gate_guard_harm_rate` et `series_gate_guard_benefit_rate` sur les seuls exemples étiquetés. Leur différence est le gain d'accuracy sur ce test. Avec `--iid-intervals`, des intervalles de Wilson approximatifs sont aussi disponibles pour ces deux taux, sous les hypothèses d'indépendance indiquées dans le README.

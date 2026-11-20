@@ -77,3 +77,24 @@ La perte moyenne les log-probabilités des positifs dans chaque direction. Elle 
 ## Vérification
 
 Les **52 tests passent**. Les nouveaux cas vérifient les sept combinaisons, le maintien des cibles supervisées, le RNG, la partition du calendrier entre rangs, la reprise exacte de l'entraînement équilibré, le fine-tuning avec un optimiseur neuf et les gradients de l'alignement multi-positif. Un test local DDP à deux processus exécute sept étapes avec deux micro-lots accumulés et une validation finale. La CI ajoute un démarrage depuis un checkpoint dans ce scénario distribué. Le [rapport de validation](artifacts/learning-acceptance.json) regroupe les vérifications locales et les compteurs d'exposition.
+
+## Alignement distribué entre rangs
+
+`alignment_scope: "global"` permet, pendant l'entraînement distribué, de réunir les représentations des rangs avant de calculer l'objectif contrastif. La valeur par défaut, `"local"`, conserve le comportement historique. Par exemple, un rang qui ne reçoit qu'un seul exemple ne fournit aucune perte contrastive locale ; deux rangs ayant chacun une paire de modalités peuvent en revanche fournir deux exemples à la perte globale. Cela augmente le nombre de négatifs disponibles, une propriété étudiée notamment dans [SimCLR](https://proceedings.mlr.press/v119/chen20j.html), sans garantir un gain pour ces données ou ce modèle.
+
+Le rassemblement accepte des tailles de lots différentes et des modalités différentes selon le rang. Pour chaque paire de modalités, seuls les exemples possédant **les deux** modalités participent ; il faut au moins deux exemples de cette paire au total. Les paires de modalités actives sont moyennées avec le même poids. En mode `alignment_mode: "class"`, les étiquettes connues peuvent partager leurs positifs ; les étiquettes absentes ou `-100` restent individuelles. Quand aucune paire n'a deux exemples, la perte globale vaut zéro et tous les rangs participent quand même au backward.
+
+Pour un fine-tuning depuis un checkpoint existant :
+
+```bash
+.venv/bin/python -m torch.distributed.run --standalone --nproc-per-node=2 \
+  -m chimera --threads 1 train --init-from model.pt \
+  --model-overrides configs/global-alignment-overrides.json \
+  --batch-size 1 --steps 100 --output runs/global-alignment
+```
+
+Tous les rangs du groupe distribué par défaut doivent utiliser la même configuration et exécuter les appels d'entraînement et de backward dans le même ordre ; un sous-groupe DDP isolé n'est pas pris en charge par ce mode. Les dimensions, dtypes, modes et températures sont comparés entre rangs avant le rassemblement des représentations. Le mode global utilise un groupe de communication séparé de celui du réducteur DDP ; il ajoute des collectives au forward et au backward, y compris pendant `no_sync`. Il ne réunit pas les exemples de micro-lots différents lors d'une accumulation de gradients. Les représentations rassemblées et les matrices de similarité augmentent la mémoire avec le nombre d'exemples globaux ; les matrices peuvent croître quadratiquement. La détermination de la taille maximale et des paires actives peut synchroniser le device.
+
+En mode évaluation, ou sans groupe distribué à plusieurs rangs, le calcul reste local. Cela permet notamment à la validation effectuée sur le seul rang 0 de fonctionner sans collective. Les groupes de communication ne sont ni sauvegardés dans le checkpoint ni copiés avec le modèle ; ils sont recréés collectivement au prochain entraînement distribué.
+
+Les tests comparent la perte et les gradients à un calcul sur lot global, en modes `paired` et `class`, avec lots inégaux, étiquettes inconnues, modalités absentes, accumulation et rang sans gradient local. Une reprise DDP sur deux processus CPU avec checkpointing des activations reproduit les poids d'une exécution continue. Les essais couvrent Gloo sur CPU ; aucun test NCCL/GPU ni gain de qualité après entraînement réel n'est revendiqué.

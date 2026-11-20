@@ -84,6 +84,8 @@ Chaque bloc du décodeur combine :
 
 Une [normalisation RMS stable optionnelle](NUMERICAL_PRECISION.md) évite le débordement des carrés sur les grandes activations finies ; le chemin historique reste le défaut.
 
+L'[alignement contrastif peut utiliser les exemples des autres rangs](LEARNING.md#alignement-distribué-entre-rangs) pendant l'entraînement DDP ; le calcul local reste le défaut.
+
 Le modèle ajoute une prédiction auxiliaire de plusieurs tokens futurs, un alignement contrastif entre modalités, la normalisation temporelle réversible, une projection directe de l'historique vers les horizons futurs et une tête de prévision dont les quantiles ne peuvent pas se croiser. Le tokenizer par octets couvre tout Unicode sans téléchargement de vocabulaire ; il est moins compact qu'un tokenizer de sous-mots.
 
 Les encodeurs d'images et d'historique sont bidirectionnels. L'historique donné en entrée doit donc se terminer **avant** le futur à prédire. Les futurs cibles ne sont jamais injectés dans les latents. Le décodeur de texte est causal, y compris sa convolution ; les tests modifient les tokens futurs et vérifient que les logits passés restent identiques.

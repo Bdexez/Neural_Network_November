@@ -47,6 +47,7 @@ class ChimeraConfig:
     mtp_weight: float = 0.1
     alignment_weight: float = 0.05
     alignment_mode: str = "paired"
+    alignment_scope: str = "local"
     alignment_temperature: float = 0.1
     text_weight: float = 1.0
     classification_weight: float = 1.0
@@ -94,6 +95,8 @@ class ChimeraConfig:
             raise ValueError("stable_rms_norm doit être booléen")
         if self.alignment_mode not in ("paired", "class"):
             raise ValueError("alignment_mode doit être paired ou class")
+        if self.alignment_scope not in ("local", "global"):
+            raise ValueError("alignment_scope doit être local ou global")
         if not math.isfinite(self.alignment_temperature) or self.alignment_temperature <= 0:
             raise ValueError("alignment_temperature doit être finie et > 0")
         self.quantiles = tuple(self.quantiles)

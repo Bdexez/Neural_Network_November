@@ -3,10 +3,12 @@ import math
 
 import torch
 from torch import nn
+from torch import distributed as dist
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
 
 from .config import ChimeraConfig
+from .distributed_alignment import distributed_alignment_loss
 from .losses import quantile_pinball_loss, symmetric_contrastive_loss
 from .forecast_adapter import ForecastAdapter, ForecastAdapterContext
 from .modules import (
@@ -52,6 +54,8 @@ class Chimera(nn.Module):
     def __init__(self, config: ChimeraConfig):
         super().__init__()
         self.config = config
+        self._alignment_group = None
+        self._alignment_world = None
         d = config.d_model
         self.embedding = nn.Embedding(config.vocab_size, d)
         self.vision = VisionEncoder(config)
@@ -92,6 +96,19 @@ class Chimera(nn.Module):
         for block in self.blocks:
             for expert in [*block.moe.experts, block.moe.shared]:
                 nn.init.normal_(expert.down.weight, std=0.02 / math.sqrt(2 * config.n_layers))
+
+    def __getstate__(self):
+        # Les groupes de communication sont propres au processus et ne doivent
+        # pas être copiés ou sérialisés avec le modèle.
+        state = super().__getstate__()
+        state["_alignment_group"] = None
+        state["_alignment_world"] = None
+        return state
+
+    def __setstate__(self, state):
+        super().__setstate__(state)
+        self._alignment_group = None
+        self._alignment_world = None
 
     @staticmethod
     def _initialize(module):
@@ -289,8 +306,19 @@ class Chimera(nn.Module):
         if forecast_targets is not None:
             losses["forecast"] = quantile_pinball_loss(forecast, forecast_targets, c.quantiles)
             total = total + c.forecast_weight * losses["forecast"]
-        # Alignement contrastif de toutes les paires disponibles, jamais fictif avec B=1.
-        if len(align_vectors) > 1 and batch > 1:
+        # En entraînement distribué, toutes les paires effectivement présentes
+        # peuvent partager leurs exemples négatifs entre rangs.
+        distributed_alignment = (c.alignment_scope == "global" and self.training and dist.is_available()
+                                 and dist.is_initialized() and dist.get_world_size() > 1)
+        if distributed_alignment:
+            if self._alignment_group is None or self._alignment_world is not dist.group.WORLD:
+                self._alignment_group = dist.new_group()
+                self._alignment_world = dist.group.WORLD
+            vectors = {i: F.normalize(self.alignment[i](v).float(), dim=-1) for i, v in align_vectors}
+            losses["alignment"] = distributed_alignment_loss(vectors, class_labels, c.alignment_temperature,
+                                                              c.alignment_mode, group=self._alignment_group)
+            total = total + c.alignment_weight * losses["alignment"]
+        elif len(align_vectors) > 1 and batch > 1:
             vectors = [F.normalize(self.alignment[i](v).float(), dim=-1) for i, v in align_vectors]
             contrastive = []
             for i in range(len(vectors)):

@@ -1,0 +1,265 @@
+{
+  "settings": {
+    "checkpoint": "/home/bdex/delivery/Neural_Network_November/runs/joint-affine-pilot/control/latest.pt",
+    "output": "artifacts/series-gate-study.json",
+    "head_batches": 96,
+    "gate_batches": 192,
+    "validation_batches": 48,
+    "test_batches": 24,
+    "batch_size": 32,
+    "head_seed": 78000000,
+    "head_mask_seed": 79000000,
+    "gate_seed": 80000000,
+    "gate_mask_seed": 81000000,
+    "gate_transform_seed": 82000000,
+    "validation_seed": 83000000,
+    "validation_mask_seed": 84000000,
+    "validation_transform_seed": 85000000,
+    "test_seed": 86000000,
+    "test_mask_seed": 87000000,
+    "optimizer_seed": 713,
+    "shape_context": 16,
+    "epochs": 50,
+    "fit_batch_size": 128,
+    "learning_rate": 0.001,
+    "threshold": 0.03,
+    "threads": 2
+  },
+  "checkpoint_sha256": "2d2b6619ddf019a83f2458343b8665d091e62d1513507b9f7f8c97533e45fe43",
+  "checkpoint_step": 180,
+  "classifier_sha256": "1ce7ea997876ae519acf03d9e5d34a0f7818c4880abef64034fabde085a6d144",
+  "gate_sha256": "cb576c08f061c8fe2db439154f92ffe652c232ee138e5ac47f33968899b2d2f5",
+  "artifact_hash_format": "JSON UTF-8 avec cl\u00e9s tri\u00e9es et s\u00e9parateurs compacts",
+  "gate": {
+    "train_examples": 6144,
+    "validation_examples": 1536,
+    "best_epoch": 26,
+    "validation_gain": 0.1380208283662796
+  },
+  "results": {
+    "8": {
+      "identity": {
+        "examples": 768,
+        "base_accuracy": 0.6627604166666666,
+        "head_accuracy": 0.5208333333333334,
+        "gate_accuracy": 0.6354166666666666,
+        "gate_gain_vs_base": -0.02734375,
+        "head_selection_rate": 0.2669270833333333
+      },
+      "shift1": {
+        "examples": 768,
+        "base_accuracy": 0.2903645833333333,
+        "head_accuracy": 0.5208333333333334,
+        "gate_accuracy": 0.4752604166666667,
+        "gate_gain_vs_base": 0.18489583333333334,
+        "head_selection_rate": 0.625
+      },
+      "shift3": {
+        "examples": 768,
+        "base_accuracy": 0.16276041666666666,
+        "head_accuracy": 0.5208333333333334,
+        "gate_accuracy": 0.51953125,
+        "gate_gain_vs_base": 0.3567708333333333,
+        "head_selection_rate": 0.7981770833333334
+      },
+      "shift20": {
+        "examples": 768,
+        "base_accuracy": 0.16276041666666666,
+        "head_accuracy": 0.5208333333333334,
+        "gate_accuracy": 0.5182291666666666,
+        "gate_gain_vs_base": 0.35546875,
+        "head_selection_rate": 0.80078125
+      },
+      "scale0.5": {
+        "examples": 768,
+        "base_accuracy": 0.4244791666666667,
+        "head_accuracy": 0.5208333333333334,
+        "gate_accuracy": 0.4596354166666667,
+        "gate_gain_vs_base": 0.03515625,
+        "head_selection_rate": 0.4192708333333333
+      },
+      "scale0.1": {
+        "examples": 768,
+        "base_accuracy": 0.16015625,
+        "head_accuracy": 0.5208333333333334,
+        "gate_accuracy": 0.51953125,
+        "gate_gain_vs_base": 0.359375,
+        "head_selection_rate": 0.9986979166666666
+      },
+      "scale2": {
+        "examples": 768,
+        "base_accuracy": 0.6419270833333334,
+        "head_accuracy": 0.5208333333333334,
+        "gate_accuracy": 0.6015625,
+        "gate_gain_vs_base": -0.040364583333333336,
+        "head_selection_rate": 0.2916666666666667
+      },
+      "scale10": {
+        "examples": 768,
+        "base_accuracy": 0.5143229166666666,
+        "head_accuracy": 0.5208333333333334,
+        "gate_accuracy": 0.51171875,
+        "gate_gain_vs_base": -0.0026041666666666665,
+        "head_selection_rate": 0.4869791666666667
+      },
+      "scale4_shift-50": {
+        "examples": 768,
+        "base_accuracy": 0.21614583333333334,
+        "head_accuracy": 0.5208333333333334,
+        "gate_accuracy": 0.5013020833333334,
+        "gate_gain_vs_base": 0.28515625,
+        "head_selection_rate": 0.8125
+      }
+    },
+    "16": {
+      "identity": {
+        "examples": 768,
+        "base_accuracy": 0.7044270833333334,
+        "head_accuracy": 0.4986979166666667,
+        "gate_accuracy": 0.6861979166666666,
+        "gate_gain_vs_base": -0.018229166666666668,
+        "head_selection_rate": 0.21614583333333334
+      },
+      "shift1": {
+        "examples": 768,
+        "base_accuracy": 0.20703125,
+        "head_accuracy": 0.4986979166666667,
+        "gate_accuracy": 0.4596354166666667,
+        "gate_gain_vs_base": 0.2526041666666667,
+        "head_selection_rate": 0.5169270833333334
+      },
+      "shift3": {
+        "examples": 768,
+        "base_accuracy": 0.16276041666666666,
+        "head_accuracy": 0.4986979166666667,
+        "gate_accuracy": 0.49609375,
+        "gate_gain_vs_base": 0.3333333333333333,
+        "head_selection_rate": 0.7122395833333334
+      },
+      "shift20": {
+        "examples": 768,
+        "base_accuracy": 0.16276041666666666,
+        "head_accuracy": 0.4986979166666667,
+        "gate_accuracy": 0.4973958333333333,
+        "gate_gain_vs_base": 0.3346354166666667,
+        "head_selection_rate": 0.7291666666666666
+      },
+      "scale0.5": {
+        "examples": 768,
+        "base_accuracy": 0.5559895833333334,
+        "head_accuracy": 0.4986979166666667,
+        "gate_accuracy": 0.5416666666666666,
+        "gate_gain_vs_base": -0.014322916666666666,
+        "head_selection_rate": 0.17578125
+      },
+      "scale0.1": {
+        "examples": 768,
+        "base_accuracy": 0.25,
+        "head_accuracy": 0.4986979166666667,
+        "gate_accuracy": 0.4895833333333333,
+        "gate_gain_vs_base": 0.23958333333333334,
+        "head_selection_rate": 0.93359375
+      },
+      "scale2": {
+        "examples": 768,
+        "base_accuracy": 0.6497395833333334,
+        "head_accuracy": 0.4986979166666667,
+        "gate_accuracy": 0.5885416666666666,
+        "gate_gain_vs_base": -0.061197916666666664,
+        "head_selection_rate": 0.3372395833333333
+      },
+      "scale10": {
+        "examples": 768,
+        "base_accuracy": 0.4635416666666667,
+        "head_accuracy": 0.4986979166666667,
+        "gate_accuracy": 0.5182291666666666,
+        "gate_gain_vs_base": 0.0546875,
+        "head_selection_rate": 0.6067708333333334
+      },
+      "scale4_shift-50": {
+        "examples": 768,
+        "base_accuracy": 0.19401041666666666,
+        "head_accuracy": 0.4986979166666667,
+        "gate_accuracy": 0.4856770833333333,
+        "gate_gain_vs_base": 0.2916666666666667,
+        "head_selection_rate": 0.8671875
+      }
+    },
+    "32": {
+      "identity": {
+        "examples": 768,
+        "base_accuracy": 0.8802083333333334,
+        "head_accuracy": 0.6015625,
+        "gate_accuracy": 0.8359375,
+        "gate_gain_vs_base": -0.044270833333333336,
+        "head_selection_rate": 0.20182291666666666
+      },
+      "shift1": {
+        "examples": 768,
+        "base_accuracy": 0.16276041666666666,
+        "head_accuracy": 0.6015625,
+        "gate_accuracy": 0.5690104166666666,
+        "gate_gain_vs_base": 0.40625,
+        "head_selection_rate": 0.8020833333333334
+      },
+      "shift3": {
+        "examples": 768,
+        "base_accuracy": 0.16276041666666666,
+        "head_accuracy": 0.6015625,
+        "gate_accuracy": 0.6015625,
+        "gate_gain_vs_base": 0.4388020833333333,
+        "head_selection_rate": 0.8502604166666666
+      },
+      "shift20": {
+        "examples": 768,
+        "base_accuracy": 0.16276041666666666,
+        "head_accuracy": 0.6015625,
+        "gate_accuracy": 0.61328125,
+        "gate_gain_vs_base": 0.4505208333333333,
+        "head_selection_rate": 0.79296875
+      },
+      "scale0.5": {
+        "examples": 768,
+        "base_accuracy": 0.5234375,
+        "head_accuracy": 0.6015625,
+        "gate_accuracy": 0.53125,
+        "gate_gain_vs_base": 0.0078125,
+        "head_selection_rate": 0.052083333333333336
+      },
+      "scale0.1": {
+        "examples": 768,
+        "base_accuracy": 0.3138020833333333,
+        "head_accuracy": 0.6015625,
+        "gate_accuracy": 0.4973958333333333,
+        "gate_gain_vs_base": 0.18359375,
+        "head_selection_rate": 0.6106770833333334
+      },
+      "scale2": {
+        "examples": 768,
+        "base_accuracy": 0.58203125,
+        "head_accuracy": 0.6015625,
+        "gate_accuracy": 0.640625,
+        "gate_gain_vs_base": 0.05859375,
+        "head_selection_rate": 0.50390625
+      },
+      "scale10": {
+        "examples": 768,
+        "base_accuracy": 0.3372395833333333,
+        "head_accuracy": 0.6015625,
+        "gate_accuracy": 0.6015625,
+        "gate_gain_vs_base": 0.2643229166666667,
+        "head_selection_rate": 0.6953125
+      },
+      "scale4_shift-50": {
+        "examples": 768,
+        "base_accuracy": 0.16927083333333334,
+        "head_accuracy": 0.6015625,
+        "gate_accuracy": 0.6015625,
+        "gate_gain_vs_base": 0.4322916666666667,
+        "head_selection_rate": 0.9947916666666666
+      }
+    }
+  },
+  "torch_version": "2.15.0+cpu",
+  "scope": "Un checkpoint et des donn\u00e9es synth\u00e9tiques ; ne d\u00e9montre pas la robustesse sur donn\u00e9es r\u00e9elles."
+}

@@ -223,3 +223,27 @@ Prévoir quatre jeux distincts : ajustement de la tête, ajustement de la porte,
 L'artefact est lié aux SHA-256 du checkpoint et de la tête, ainsi qu'à la précision AMP. Il conserve les empreintes des jeux, les hyperparamètres, la seed, la taille des lots d'extraction, le device et la version de PyTorch ; la reproduction dépend aussi de l'environnement numérique. La commande refuse les jeux dont les octets sont identiques ; `--audit-series` compare aussi les historiques exacts entre ajustement et validation. `--classifier-data` ajoute le jeu de la tête à cet audit et vérifie son empreinte. Ces contrôles ne détectent pas tous les recouvrements temporels ni les transformations d'un même exemple.
 
 Les sorties d'origine restent présentes : `class_id` et `class_probabilities` décrivent toujours le modèle de base. `series_gate_class_id`, `series_gate_selected` et `series_gate_advantage` décrivent la décision supplémentaire ; l'évaluation donne son accuracy, son gain par rapport au modèle d'origine et la fréquence de sélection de la tête. Les éventuelles probabilités et ensembles conformes de la tête restent associés à **la tête**, et non à la décision de la porte. La porte ajoute un passage dans l'encodeur temporel pour la tête et une petite inférence MLP ; son ajustement conserve en mémoire les caractéristiques des exemples étiquetés. Un gain sur la validation ne garantit aucun gain sur une autre distribution.
+
+### Comparaison synthétique de la porte
+
+L'essai utilise un seul checkpoint `tiny` et quatre plages de seeds distinctes : 3 072 exemples pour la tête, 6 144 pour la porte, 1 536 pour sélectionner son époque et 768 exemples de test par condition. Les historiques comptent 8, 16 ou 32 pas ; un masquage indépendant de 30 % touche la moitié des historiques. L'ajustement de la porte mélange des séries inchangées et des décalages et gains aléatoires ; les transformations de test sont appliquées aux mêmes exemples et masques. La validation sélectionne l'époque 26, avec un gain de 13,80 points sur son mélange propre.
+
+| Pas | Transformation de test | Modèle de base | Tête | Porte | Tête sélectionnée |
+| ---: | --- | ---: | ---: | ---: | ---: |
+| 8 | Identité | 66,28 % | 52,08 % | 63,54 % | 26,69 % |
+| 8 | Décalage +1 | 29,04 % | 52,08 % | 47,53 % | 62,50 % |
+| 8 | Gain ×2 | 64,19 % | 52,08 % | 60,16 % | 29,17 % |
+| 16 | Identité | 70,44 % | 49,87 % | 68,62 % | 21,61 % |
+| 16 | Décalage +1 | 20,70 % | 49,87 % | 45,96 % | 51,69 % |
+| 16 | Gain ×2 | 64,97 % | 49,87 % | 58,85 % | 33,72 % |
+| 32 | Identité | 88,02 % | 60,16 % | 83,59 % | 20,18 % |
+| 32 | Décalage +1 | 16,28 % | 60,16 % | 56,90 % | 80,21 % |
+| 32 | Gain ×0,1 | 31,38 % | 60,16 % | 49,74 % | 61,07 % |
+| 32 | Gain ×2 | 58,20 % | 60,16 % | 64,06 % | 50,39 % |
+
+La porte améliore fortement certains décalages, mais régresse sur les données inchangées et reste inférieure à la tête pour le gain ×0,1 à 32 pas. Le mélange d'entraînement, le checkpoint et ces séries synthétiques conditionnent les résultats ; aucune amélioration universelle n'est établie. Les [mesures complètes](artifacts/series-gate-study.json) incluent les autres transformations, les seeds et les empreintes.
+
+```bash
+.venv/bin/python tools/benchmark_series_gate.py \
+  --checkpoint runs/joint-affine-pilot/control/latest.pt --output runs/series-gate-study.json
+```

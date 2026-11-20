@@ -1,6 +1,7 @@
 """Mesures pondérées par les cibles observées, et diagnostics des prévisions."""
 
 from contextlib import nullcontext
+from collections import Counter
 import math
 
 import torch
@@ -8,11 +9,13 @@ import torch
 from .routing_metrics import summarize_expert_usage
 
 
-def evaluate(model, batches, amp="none", *, calibration=None):
+def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=None):
     if amp not in ("none", "bf16", "fp16"):
         raise ValueError("amp doit être none, bf16 ou fp16")
     if calibration is not None:
         calibration.validate(model.config, amp=amp)
+    if series_classifier is not None:
+        series_classifier.validate(model.config, amp=amp)
     was_training = model.training
     model.eval()
     device = next(model.parameters()).device
@@ -20,6 +23,8 @@ def evaluate(model, batches, amp="none", *, calibration=None):
     auxiliary_totals, auxiliary_counts = {}, {}
     expert_totals, expert_tokens = None, 0
     correct = class_count = forecast_count = 0
+    series_class_correct = series_class_count = 0
+    series_class_confusion = Counter() if series_classifier is not None else None
     complete_forecasts = raw_joint_covered = calibrated_joint_covered = 0
     absolute = squared = covered = width = 0.0
     horizon_error = torch.zeros(model.config.forecast_horizon, dtype=torch.float64)
@@ -82,6 +87,7 @@ def evaluate(model, batches, amp="none", *, calibration=None):
                 n = next(iter(batch.values())).size(0)
                 with autocast():
                     output = model(**batch)
+                    series_scores = series_classifier.scores(model, batch) if series_classifier is not None else None
                 usage = getattr(output, "expert_usage", None)
                 routed = getattr(output, "routed_tokens", None)
                 if usage is not None and routed is not None:
@@ -103,6 +109,14 @@ def evaluate(model, batches, amp="none", *, calibration=None):
                     weights["classification"] = observed.sum().item()
                     correct += ((output.classification_logits.argmax(-1) == labels) & observed).sum().item()
                     class_count += weights["classification"]
+                    if series_scores is not None:
+                        predictions = series_scores.argmax(-1)
+                        series_class_correct += ((predictions == labels) & observed).sum().item()
+                        series_class_count += observed.sum().item()
+                        pairs = labels[observed] * model.config.num_classes + predictions[observed]
+                        distinct, frequencies = pairs.unique(return_counts=True)
+                        for pair, frequency in zip(distinct.cpu().tolist(), frequencies.cpu().tolist()):
+                            series_class_confusion[divmod(pair, model.config.num_classes)] += frequency
                 if "forecast_targets" in batch:
                     target = batch["forecast_targets"]
                     observed = torch.isfinite(target)
@@ -194,6 +208,11 @@ def evaluate(model, batches, amp="none", *, calibration=None):
         if "classification" in counts:
             result["classified_examples"] = class_count
             result["accuracy"] = correct / class_count if class_count else None
+        if series_classifier is not None:
+            result["series_classifier_examples"] = series_class_count
+            result["series_classifier_accuracy"] = series_class_correct / series_class_count if series_class_count else None
+            result["series_classifier_confusion"] = [dict(actual=actual, predicted=predicted, count=count)
+                                                      for (actual, predicted), count in sorted(series_class_confusion.items())]
         if "loss" in result:
             # Chaque tâche est d'abord agrégée selon son nombre de cibles ; les
             # termes auxiliaires conservent leur agrégation par lot existante.

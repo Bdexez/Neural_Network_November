@@ -15,6 +15,7 @@ from .config import ChimeraConfig
 from .data import JointDataset, collate_records, synthetic_batch
 from .forecast_adapter import fit_forecast_adapter
 from .model import Chimera
+from .series_classifier import SeriesClassifier, fit_series_classifier
 from .split_audit import audit_splits
 from .temporal_splits import prepare_temporal_splits
 from .tokenizer import ByteTokenizer
@@ -175,6 +176,7 @@ def main(argv=None):
     predict.add_argument("--device", default="cpu")
     predict.add_argument("--amp", choices=("none", "bf16", "fp16"), default="none")
     predict.add_argument("--calibration", help="Calibration JSON ajustée sur ce checkpoint et ces modalités")
+    predict.add_argument("--series-classifier", help="Tête de classification temporelle ajustée séparément")
     export = commands.add_parser("export", help="Exporter les poids sans l'optimiseur pour l'inférence")
     export.add_argument("--checkpoint", required=True)
     export.add_argument("--output", required=True)
@@ -186,6 +188,16 @@ def main(argv=None):
     evaluation.add_argument("--amp", choices=("none", "bf16", "fp16"), default="none")
     evaluation.add_argument("--output")
     evaluation.add_argument("--calibration", help="Mesurer aussi les intervalles calibrés")
+    evaluation.add_argument("--series-classifier", help="Mesurer aussi la tête de classification temporelle")
+    series_fit = commands.add_parser("refine-series-classifier", help="Ajuster une tête temporelle standardisée")
+    series_fit.add_argument("--checkpoint", required=True)
+    series_fit.add_argument("--data", required=True, help="JSONL de séries avec class_label")
+    series_fit.add_argument("--output", required=True)
+    series_fit.add_argument("--ridge", type=float, default=.001)
+    series_fit.add_argument("--scale-floor", type=float, default=1e-4)
+    series_fit.add_argument("--batch-size", type=int, default=32)
+    series_fit.add_argument("--device", default="cpu")
+    series_fit.add_argument("--amp", choices=("none", "bf16", "fp16"), default="none")
     calibrating = commands.add_parser("calibrate", help="Calibrer les intervalles sur un jeu séparé")
     calibrating.add_argument("--checkpoint", required=True)
     calibrating.add_argument("--data", required=True)
@@ -295,14 +307,18 @@ def main(argv=None):
     elif args.command == "predict":
         if args.max_new_tokens < 0:
             parser.error("max-new-tokens doit être >= 0")
-        sources = (args.data, args.checkpoint, args.calibration)
+        sources = (args.data, args.checkpoint, args.calibration, args.series_classifier)
         if args.output and any(same_file(args.output, path) for path in sources if path):
             parser.error("Le fichier de prédictions doit être distinct des fichiers d'entrée")
         model, _ = load_checkpoint(args.checkpoint, args.device)
         calibration = ForecastCalibration.load(args.calibration) if args.calibration else None
+        series_classifier = SeriesClassifier.load(args.series_classifier) if args.series_classifier else None
         if calibration is not None:
             calibration.validate_checkpoint(args.checkpoint)
             calibration.validate(model.config, amp=args.amp)
+        if series_classifier is not None:
+            series_classifier.validate_checkpoint(args.checkpoint)
+            series_classifier.validate(model.config, amp=args.amp)
         model.eval()
         dataset = JointDataset(args.data, model.config)
         if dataset.references_image(args.output):
@@ -324,6 +340,10 @@ def main(argv=None):
                     "quantiles": list(model.config.quantiles),
                     "forecast": output.forecast[0].tolist(),
                 }
+                if series_classifier is not None:
+                    scores = series_classifier.scores(model, batch)[0]
+                    row["series_classifier_class_id"] = scores.argmax().item()
+                    row["series_classifier_scores"] = scores.tolist()
                 if calibration is not None:
                     row["calibrated_interval"] = calibration.interval(output.forecast)[0].tolist()
                     row["calibrated_nominal_coverage"] = calibration.coverage
@@ -353,6 +373,25 @@ def main(argv=None):
         del payload
         save_checkpoint(args.output, model, step=step, trainer=trainer)
         print(f"Poids d'inférence écrits dans {args.output}")
+    elif args.command == "refine-series-classifier":
+        if args.batch_size < 1:
+            parser.error("batch-size doit être > 0")
+        if any(same_file(args.output, source) for source in (args.data, args.checkpoint)):
+            parser.error("La sortie doit être distincte des fichiers d'entrée")
+        model, _ = load_checkpoint(args.checkpoint, args.device)
+        dataset = JointDataset(args.data, model.config)
+        if dataset.references_image(args.output):
+            parser.error("La sortie doit être distincte des images d'entrée")
+        loader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=collate_records,
+                            generator=torch.Generator().manual_seed(0))
+        classifier = fit_series_classifier(model, loader, ridge=args.ridge, scale_floor=args.scale_floor,
+                                           amp=args.amp, checkpoint_sha256=file_sha256(args.checkpoint),
+                                           dataset_sha256=dataset.fingerprint)
+        classifier.validate_checkpoint(args.checkpoint)
+        with prediction_stream(args.output) as stream:
+            stream.write(json.dumps(classifier.to_dict(), indent=2, allow_nan=False) + "\n")
+        print(json.dumps(dict(output=args.output, class_counts=classifier.class_counts,
+                              checkpoint_sha256=classifier.checkpoint_sha256)))
     elif args.command == "refine-forecast":
         if args.batch_size < 1 or args.context < 1 or not math.isfinite(args.ridge) or args.ridge <= 0:
             parser.error("batch-size, context et ridge doivent être strictement positifs ; ridge doit être fini")
@@ -402,6 +441,8 @@ def main(argv=None):
         sources = [args.data, args.checkpoint]
         if args.command == "evaluate" and args.calibration:
             sources.append(args.calibration)
+        if args.command == "evaluate" and args.series_classifier:
+            sources.append(args.series_classifier)
         if args.output and any(same_file(args.output, path) for path in sources):
             parser.error("Le fichier de sortie doit être distinct des fichiers d'entrée")
         model, _ = load_checkpoint(args.checkpoint, args.device)
@@ -427,9 +468,12 @@ def main(argv=None):
                                   examples=len(dataset), modalities=calibration.modalities)))
             return
         calibration = ForecastCalibration.load(args.calibration) if args.calibration else None
+        series_classifier = SeriesClassifier.load(args.series_classifier) if args.series_classifier else None
         if calibration is not None:
             calibration.validate_checkpoint(args.checkpoint)
-        report = evaluate(model, loader, args.amp, calibration=calibration)
+        if series_classifier is not None:
+            series_classifier.validate_checkpoint(args.checkpoint)
+        report = evaluate(model, loader, args.amp, calibration=calibration, series_classifier=series_classifier)
         if calibration is not None:
             identical = (dataset.fingerprint == calibration.dataset_sha256
                          if calibration.dataset_sha256 is not None else None)
@@ -439,6 +483,9 @@ def main(argv=None):
             report["calibration_external_images_match"] = (
                 dataset.image_fingerprint == calibration.dataset_images_sha256
                 if calibration.dataset_images_recorded else None)
+        if series_classifier is not None:
+            report["series_classifier_data_reused"] = (
+                True if dataset.fingerprint == series_classifier.dataset_sha256 else None)
         content = json.dumps(report, indent=2, allow_nan=False) + "\n"
         if args.output:
             with prediction_stream(args.output) as stream:

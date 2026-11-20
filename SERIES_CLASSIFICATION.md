@@ -29,6 +29,21 @@ Préparer un JSONL de séries contenant `class_label`, distinct des jeux de sél
 
 La prédiction conserve `class_id`, `class_probabilities` et `forecast` du modèle d'origine, et ajoute `series_classifier_class_id` et `series_classifier_scores`. L'évaluation conserve ses métriques habituelles et ajoute `series_classifier_accuracy`, l'effectif et une confusion creuse sous forme de triplets `actual`, `predicted`, `count`. `series_classifier_data_reused` vaut `true` si les octets JSONL sont identiques à ceux de l'ajustement, sinon `null` : des fichiers différents peuvent partager des exemples. La tête est liée au SHA-256 exact du checkpoint, à sa configuration et à la précision AMP utilisée à l'ajustement. L'extraction nécessite un passage supplémentaire dans l'encodeur temporel.
 
+## Forme temporelle et masquage facultatifs
+
+`--shape-context 16` ajoute à la représentation moyenne seize segments de valeurs standardisées par variable, leur fraction observée et des moments de différences et de produits aux décalages 1, 2 et 4. Les segments utilisent les positions valides ; dans chaque paire, les deux valeurs doivent être observées. Un segment ou un décalage sans observation correspondante vaut zéro. Ces caractéristiques conservent une partie de la forme temporelle, mais la régression devient plus grande : avec trois variables et `d_model=64`, elle passe de 64 à 187 entrées, et de 390 à 1 128 coefficients avec les biais.
+
+`--missing-rate` et `--mask-probability` permettent de masquer des valeurs uniquement pendant l'ajustement de la tête. Le tirage utilise un générateur dédié ; les cibles et autres données ne sont pas modifiées. La seed, les paramètres de masquage, le device et, pour la commande CLI, la taille des lots sont enregistrés. La reproduction dépend aussi de l'ordre des exemples, du découpage en lots et de l'environnement PyTorch. Les anciens fichiers de tête version 1 restent lisibles ; les caractéristiques de forme ou l'augmentation utilisent le format version 2.
+
+```bash
+.venv/bin/python -m chimera refine-series-classifier \
+  --checkpoint runs/joint-affine-pilot/control/latest.pt --data data/series-head-train.jsonl \
+  --shape-context 16 --missing-rate 0.3 --mask-probability 0.5 --augmentation-seed 49000000 \
+  --output runs/series-shape-classifier.json
+```
+
+La taille des statistiques ridge croît quadratiquement avec le nombre d'entrées. Le calcul des caractéristiques de forme parcourt chaque historique ; son coût dépend de la longueur des séries et du matériel.
+
 ## Comparaison synthétique indépendante
 
 Le checkpoint `tiny` du contrôle joint-affine est fixé après 180 étapes. La tête est ajustée par ridge sur 3 072 exemples de séries seulement, en alternant des historiques de 8, 16 et 32 pas. Les 512 exemples de test par condition utilisent d'autres seeds ; les transformations et masques d'une même ligne sont appariés. Les observations manquantes sont masquées indépendamment des valeurs ; l'ajustement ne comportait pas ces masques.
@@ -51,4 +66,27 @@ Dans cet essai, la tête améliore les conditions décalées mais perd nettement
 ```bash
 .venv/bin/python tools/benchmark_series_classifier.py \
   --checkpoint runs/joint-affine-pilot/control/latest.pt --output runs/series-classifier-study.json
+```
+
+## Comparaison des caractéristiques de forme
+
+Un second essai utilise de nouvelles seeds, le même checkpoint, 3 072 exemples d'ajustement et 512 exemples de test par condition. Les deux têtes reçoivent exactement les mêmes lots et les mêmes masques d'ajustement : chaque historique a une probabilité de 50 % de subir un masquage indépendant de 30 % de ses valeurs. Les mesures de test avec et sans masquage sont appariées entre transformations.
+
+| Historique | Modèle, identité | Tête moyenne, identité | Tête avec forme, identité | Modèle, +20 | Tête avec forme, +20 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 8 pas | 68,95 % | 47,66 % | 59,96 % | 16,02 % | 59,96 % |
+| 16 pas | 73,24 % | 49,61 % | 50,39 % | 16,02 % | 50,39 % |
+| 32 pas | 91,99 % | 56,25 % | 59,18 % | 16,02 % | 59,18 % |
+| 8 pas, 30 % masqués | 68,95 % | 45,90 % | 51,37 % | 16,02 % | 51,37 % |
+| 16 pas, 30 % masqués | 72,07 % | 53,12 % | 47,07 % | 16,02 % | 47,07 % |
+
+La forme améliore la tête moyenne sur plusieurs conditions, mais régresse de 6,05 points à seize pas avec masquage et reste moins précise que le modèle de base sur les séries non transformées. Sur ces exemples, aucune prédiction de la tête avec forme ne change parmi les cinq transformations positives testées ; ce constat ne garantit pas l'invariance numérique en général. L'essai utilise un seul checkpoint et des données synthétiques. Les [résultats complets](artifacts/series-shape-classifier-study.json) contiennent les seeds, les paramètres, les scores comparatifs et l'empreinte du checkpoint.
+
+```bash
+.venv/bin/python tools/benchmark_series_classifier.py \
+  --checkpoint runs/joint-affine-pilot/control/latest.pt --shape-context 16 \
+  --train-missing-rate 0.3 --train-mask-probability 0.5 \
+  --train-seed 48000000 --train-mask-seed 49000000 \
+  --test-seed 50000000 --mask-seed 51000000 \
+  --output runs/series-shape-classifier-study.json
 ```

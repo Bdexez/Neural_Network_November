@@ -74,6 +74,11 @@ class CalibrationCliTests(unittest.TestCase):
             self.assertIsNone(report["calibration_data_reused"])
             self.assertFalse(report["calibration_jsonl_identical"])
             self.assertTrue(report["calibration_external_images_match"])
+            self.assertEqual(report["forecast_observations_by_feature"], [14])
+            self.assertEqual(report["forecast_observations_by_horizon_feature"], [[7], [7]])
+            self.assertEqual(len(report["forecast_quantile_coverage"]), 3)
+            self.assertEqual(len(report["forecast_pinball_by_feature_quantile"][0]), 3)
+            self.assertEqual(len(report["calibrated_interval_coverage_by_feature"]), 1)
             self.assertIn("calibrated_interval_score", report)
             joint_path = root / "joint.json"
             main(["calibrate", "--checkpoint", str(checkpoint), "--data", str(calibration_data),

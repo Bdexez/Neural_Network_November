@@ -74,6 +74,7 @@ class CalibrationTests(unittest.TestCase):
                                  for section in (slice(0, 2), slice(2, 7))], calibration=fitted)
         for name in ("forecast_mae", "accuracy", "text", "forecast_interval_coverage", "forecast_interval_width"):
             self.assertEqual(raw[name], full[name], name)
+        self.assertAlmostEqual(full["forecast"], sum(full["forecast_pinball_by_quantile"]) / 3, places=6)
         for name in ("calibrated_interval_coverage", "calibrated_interval_width", "calibrated_interval_score",
                      "forecast_interval_score"):
             self.assertAlmostEqual(full[name], split[name], places=5, msg=name)
@@ -112,6 +113,99 @@ class CalibrationTests(unittest.TestCase):
         self.assertAlmostEqual(report["forecast_interval_score"], 26 / 3)
         self.assertAlmostEqual(report["calibrated_interval_score"], 4)
         self.assertEqual(report["calibrated_interval_coverage"], 1)
+
+    def test_per_variable_and_coordinate_coverage_exposes_hidden_undercoverage(self):
+        class FixedForecast(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.anchor = torch.nn.Parameter(torch.zeros(()))
+                self.config = replace(ChimeraConfig.preset("tiny"), forecast_horizon=2, series_features=3)
+
+            def forward(self, series, **kwargs):
+                forecast = series.new_tensor([-1., 0., 1.]).expand(series.size(0), 2, 3, 3)
+                return SimpleNamespace(forecast=forecast, loss=None, losses={"forecast": self.anchor * 0})
+
+        model = FixedForecast()
+        fitted = ForecastCalibration((0.1, 0.5, 0.9), 0.8, [[0., 1., 0.], [0., 1., 0.]],
+                                     [[20, 20, 20], [20, 20, 20]], ("series",))
+        targets = torch.tensor([[[0., -2., float("nan")], [.2, 3., float("nan")]],
+                                [[-1., 2., float("nan")], [0., -3., float("nan")]],
+                                [[.5, .5, float("nan")], [float("nan"), float("nan"), float("nan")]]])
+        batch = dict(series=torch.ones(3, 1, 3), forecast_targets=targets)
+        full = evaluate(model, [batch], calibration=fitted)
+        split = evaluate(model, [{key: value[section] for key, value in batch.items()}
+                                 for section in (slice(0, 1), slice(1, 3))], calibration=fitted)
+        self.assertEqual(full["forecast_observations_by_horizon"], [6, 4])
+        self.assertEqual(full["forecast_observations_by_feature"], [5, 5, 0])
+        self.assertEqual(full["forecast_observations_by_horizon_feature"], [[3, 3, 0], [2, 2, 0]])
+        self.assertEqual(full["forecast_interval_coverage"], 0.6)
+        self.assertEqual(full["forecast_interval_coverage_by_feature"], [1., .2, None])
+        self.assertEqual(full["calibrated_interval_coverage_by_feature"], [1., .6, None])
+        self.assertEqual(full["forecast_interval_coverage_by_horizon_feature"], [[1., 1 / 3, None], [1., 0., None]])
+        self.assertEqual(full["calibrated_interval_coverage_by_horizon_feature"], [[1., 1., None], [1., 0., None]])
+        self.assertEqual(full["forecast_interval_below_by_feature"], [0., .4, None])
+        self.assertEqual(full["forecast_interval_above_by_feature"], [0., .4, None])
+        self.assertEqual(full["calibrated_interval_below_by_feature"], [0., .2, None])
+        self.assertEqual(full["calibrated_interval_above_by_feature"], [0., .2, None])
+        self.assertEqual(full["forecast_quantile_levels"], [0.1, 0.5, 0.9])
+        finite_targets = [float(value) for value in targets.flatten() if torch.isfinite(value)]
+        for index, (quantile, predicted) in enumerate(zip((.1, .5, .9), (-1., 0., 1.))):
+            expected_coverage = sum(value <= predicted for value in finite_targets) / len(finite_targets)
+            expected_pinball = sum(max(quantile * (value - predicted), (quantile - 1) * (value - predicted))
+                                   for value in finite_targets) / len(finite_targets)
+            self.assertAlmostEqual(full["forecast_quantile_coverage"][index], expected_coverage)
+            self.assertAlmostEqual(full["forecast_pinball_by_quantile"][index], expected_pinball)
+            for feature in (0, 1):
+                observed = [float(value) for value in targets[:, :, feature].flatten() if torch.isfinite(value)]
+                expected = sum(value <= predicted for value in observed) / len(observed)
+                self.assertAlmostEqual(full["forecast_quantile_coverage_by_feature"][feature][index], expected)
+                expected_pinball = sum(max(quantile * (value - predicted), (quantile - 1) * (value - predicted))
+                                       for value in observed) / len(observed)
+                self.assertAlmostEqual(full["forecast_pinball_by_feature_quantile"][feature][index], expected_pinball)
+        self.assertEqual(full["forecast_quantile_coverage_by_feature"][2], [None, None, None])
+        self.assertEqual(full["forecast_pinball_by_feature_quantile"][2], [None, None, None])
+
+        def assert_nested_close(first, second):
+            if isinstance(first, list):
+                self.assertEqual(len(first), len(second))
+                for a, b in zip(first, second):
+                    assert_nested_close(a, b)
+            elif first is None:
+                self.assertIsNone(second)
+            else:
+                self.assertAlmostEqual(first, second, places=12)
+
+        for key in ("forecast_interval_coverage_by_feature", "calibrated_interval_coverage_by_feature",
+                    "forecast_interval_coverage_by_horizon_feature", "forecast_quantile_coverage",
+                    "forecast_pinball_by_quantile", "forecast_mae_by_feature", "forecast_mae_by_horizon_feature",
+                    "forecast_quantile_coverage_by_feature", "forecast_pinball_by_feature_quantile"):
+            with self.subTest(metric=key):
+                assert_nested_close(full[key], split[key])
+
+    def test_quantile_diagnostics_support_median_only_and_missing_targets(self):
+        class MedianForecast(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.anchor = torch.nn.Parameter(torch.zeros(()))
+                self.config = replace(ChimeraConfig.preset("tiny"), forecast_horizon=1, series_features=1,
+                                      quantiles=(0.5,))
+
+            def forward(self, series, **kwargs):
+                return SimpleNamespace(forecast=series.new_zeros(series.size(0), 1, 1, 1), loss=None,
+                                       losses={"forecast": self.anchor * 0})
+
+        model = MedianForecast()
+        batch = dict(series=torch.ones(2, 1, 1), forecast_targets=torch.tensor([[[-2.]], [[2.]]]))
+        report = evaluate(model, [batch])
+        self.assertEqual(report["forecast_quantile_levels"], [.5])
+        self.assertEqual(report["forecast_quantile_coverage"], [.5])
+        self.assertEqual(report["forecast_pinball_by_quantile"], [1.])
+        self.assertNotIn("forecast_interval_coverage", report)
+        batch["forecast_targets"].fill_(float("nan"))
+        empty = evaluate(model, [batch])
+        self.assertEqual(empty["forecast_quantile_coverage"], [None])
+        self.assertEqual(empty["forecast_pinball_by_quantile"], [None])
+        self.assertEqual(empty["forecast_mae_by_horizon_feature"], [[None]])
 
     def test_forecast_metrics_do_not_overflow_half_precision_subtraction(self):
         class FixedForecast(torch.nn.Module):
@@ -234,6 +328,9 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(report["forecast_joint_interval_coverage"], 0.5)
         self.assertEqual(report["calibrated_joint_interval_coverage"], 1)
         self.assertEqual(report["calibrated_coverage_scope"], "joint")
+        self.assertEqual(report["forecast_observations_by_feature"], [5, 6])
+        self.assertEqual(report["forecast_interval_coverage_by_feature"], [1., 5 / 6])
+        self.assertEqual(report["calibrated_interval_coverage_by_feature"], [1., 1.])
         self.assertIsNone(report["calibrated_interval_score"])
 
     def test_width_normalized_joint_calibration_respects_per_variable_units(self):

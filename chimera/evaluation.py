@@ -25,8 +25,23 @@ def evaluate(model, batches, amp="none", *, calibration=None):
     horizon_error = torch.zeros(model.config.forecast_horizon, dtype=torch.float64)
     horizon_count = torch.zeros_like(horizon_error)
     feature_count = torch.zeros(model.config.series_features, dtype=torch.float64)
+    feature_error = torch.zeros_like(feature_count)
+    cell_count = torch.zeros(model.config.forecast_horizon, model.config.series_features, dtype=torch.float64)
+    cell_error = torch.zeros_like(cell_count)
     feature_width = torch.zeros_like(feature_count)
     calibrated_feature_width = torch.zeros_like(feature_count)
+    feature_covered = torch.zeros_like(feature_count)
+    calibrated_feature_covered = torch.zeros_like(feature_count)
+    feature_below = torch.zeros_like(feature_count)
+    feature_above = torch.zeros_like(feature_count)
+    calibrated_feature_below = torch.zeros_like(feature_count)
+    calibrated_feature_above = torch.zeros_like(feature_count)
+    cell_covered = torch.zeros_like(cell_count)
+    calibrated_cell_covered = torch.zeros_like(cell_count)
+    quantile_hits = torch.zeros(len(model.config.quantiles), dtype=torch.float64)
+    quantile_pinball = torch.zeros_like(quantile_hits)
+    feature_quantile_hits = torch.zeros(model.config.series_features, len(model.config.quantiles), dtype=torch.float64)
+    feature_quantile_pinball = torch.zeros_like(feature_quantile_hits)
     interval_covered = torch.zeros_like(horizon_error)
     interval_width = torch.zeros_like(horizon_error)
     calibrated_covered = torch.zeros_like(horizon_error)
@@ -49,6 +64,14 @@ def evaluate(model, batches, amp="none", *, calibration=None):
     def by_feature(values):
         return [total.item() / count.item() if count else None
                 for total, count in zip(values, feature_count)]
+
+    def by_cell(values):
+        return [[total.item() / count.item() if count else None for total, count in zip(row, counts)]
+                for row, counts in zip(values, cell_count)]
+
+    def by_feature_quantile(values):
+        return [[total.item() / count.item() if count else None for total in row]
+                for row, count in zip(values, feature_count)]
 
     try:
         with torch.inference_mode():
@@ -86,15 +109,27 @@ def evaluate(model, batches, amp="none", *, calibration=None):
                     weights["forecast"] = observed.sum().item()
                     forecast_count += weights["forecast"]
                     target = target.double()
-                    median = output.forecast[..., model.config.quantiles.index(0.5)].double()
+                    predictions = output.forecast.double()
+                    median = predictions[..., model.config.quantiles.index(0.5)]
                     error = torch.where(observed, median - target, 0)
                     absolute += error.abs().sum().item()
                     squared += error.square().sum().item()
                     horizon_error += error.abs().sum((0, 2)).cpu()
                     horizon_count += observed.sum((0, 2)).cpu()
                     feature_count += observed.sum((0, 1)).cpu()
+                    feature_error += error.abs().sum((0, 1)).cpu()
+                    cell_count += observed.sum(0).cpu()
+                    cell_error += error.abs().sum(0).cpu()
+                    levels = predictions.new_tensor(model.config.quantiles)
+                    residual = torch.where(observed.unsqueeze(-1), target.unsqueeze(-1) - predictions, 0)
+                    hits = (target.unsqueeze(-1) <= predictions) & observed.unsqueeze(-1)
+                    pinball = torch.maximum(levels * residual, (levels - 1) * residual)
+                    quantile_hits += hits.sum((0, 1, 2)).cpu()
+                    quantile_pinball += pinball.sum((0, 1, 2)).cpu()
+                    feature_quantile_hits += hits.sum((0, 1)).cpu()
+                    feature_quantile_pinball += pinball.sum((0, 1)).cpu()
                     if len(model.config.quantiles) > 1:
-                        lower, upper = output.forecast[..., 0].double(), output.forecast[..., -1].double()
+                        lower, upper = predictions[..., 0], predictions[..., -1]
                         complete = observed.flatten(1).all(-1)
                         complete_forecasts += complete.sum().item()
                         inside = (target >= lower) & (target <= upper)
@@ -102,6 +137,10 @@ def evaluate(model, batches, amp="none", *, calibration=None):
                         covered += ((target >= lower) & (target <= upper) & observed).sum().item()
                         width += torch.where(observed, upper - lower, 0).double().sum().item()
                         interval_covered += ((target >= lower) & (target <= upper) & observed).sum((0, 2)).cpu()
+                        feature_covered += (inside & observed).sum((0, 1)).cpu()
+                        cell_covered += (inside & observed).sum(0).cpu()
+                        feature_below += ((target < lower) & observed).sum((0, 1)).cpu()
+                        feature_above += ((target > upper) & observed).sum((0, 1)).cpu()
                         interval_width += torch.where(observed, upper - lower, 0).double().sum((0, 2)).cpu()
                         feature_width += torch.where(observed, upper - lower, 0).sum((0, 1)).cpu()
                         alpha = 1 - (model.config.quantiles[-1] - model.config.quantiles[0])
@@ -114,6 +153,10 @@ def evaluate(model, batches, amp="none", *, calibration=None):
                             inside = (target >= low) & (target <= high)
                             calibrated_joint_covered += (inside.flatten(1).all(-1) & complete).sum().item()
                             calibrated_covered += ((target >= low) & (target <= high) & observed).sum((0, 2)).cpu()
+                            calibrated_feature_covered += (inside & observed).sum((0, 1)).cpu()
+                            calibrated_cell_covered += (inside & observed).sum(0).cpu()
+                            calibrated_feature_below += ((target < low) & observed).sum((0, 1)).cpu()
+                            calibrated_feature_above += ((target > high) & observed).sum((0, 1)).cpu()
                             calibrated_width += torch.where(observed, high - low, 0).double().sum((0, 2)).cpu()
                             calibrated_feature_width += torch.where(observed, high - low, 0).sum((0, 1)).cpu()
                             if calibration.scope == "marginal":
@@ -159,9 +202,21 @@ def evaluate(model, batches, amp="none", *, calibration=None):
                 if any(result.get(name) is not None for name in supervised) else None)
         if "forecast" in counts:
             result["forecast_observations"] = forecast_count
+            result["forecast_observations_by_horizon"] = horizon_count.long().tolist()
+            result["forecast_observations_by_feature"] = feature_count.long().tolist()
+            result["forecast_observations_by_horizon_feature"] = cell_count.long().tolist()
             result["forecast_mae"] = absolute / forecast_count if forecast_count else None
             result["forecast_rmse"] = math.sqrt(squared / forecast_count) if forecast_count else None
             result["forecast_mae_by_horizon"] = by_horizon(horizon_error)
+            result["forecast_mae_by_feature"] = by_feature(feature_error)
+            result["forecast_mae_by_horizon_feature"] = by_cell(cell_error)
+            result["forecast_quantile_levels"] = list(model.config.quantiles)
+            result["forecast_quantile_coverage"] = [value.item() / forecast_count if forecast_count else None
+                                                    for value in quantile_hits]
+            result["forecast_pinball_by_quantile"] = [value.item() / forecast_count if forecast_count else None
+                                                      for value in quantile_pinball]
+            result["forecast_quantile_coverage_by_feature"] = by_feature_quantile(feature_quantile_hits)
+            result["forecast_pinball_by_feature_quantile"] = by_feature_quantile(feature_quantile_pinball)
             if len(model.config.quantiles) > 1:
                 result["forecast_complete_examples"] = complete_forecasts
                 result["forecast_joint_interval_coverage"] = (
@@ -171,6 +226,10 @@ def evaluate(model, batches, amp="none", *, calibration=None):
                 result["forecast_nominal_coverage"] = model.config.quantiles[-1] - model.config.quantiles[0]
                 result["forecast_interval_score"] = raw_score / forecast_count if forecast_count else None
                 result["forecast_interval_coverage_by_horizon"] = by_horizon(interval_covered)
+                result["forecast_interval_coverage_by_feature"] = by_feature(feature_covered)
+                result["forecast_interval_coverage_by_horizon_feature"] = by_cell(cell_covered)
+                result["forecast_interval_below_by_feature"] = by_feature(feature_below)
+                result["forecast_interval_above_by_feature"] = by_feature(feature_above)
                 result["forecast_interval_width_by_horizon"] = by_horizon(interval_width)
                 result["forecast_interval_width_by_feature"] = by_feature(feature_width)
                 if calibration is not None:
@@ -186,6 +245,10 @@ def evaluate(model, batches, amp="none", *, calibration=None):
                     result["calibrated_joint_interval_coverage"] = (
                         calibrated_joint_covered / complete_forecasts if complete_forecasts else None)
                     result["calibrated_interval_coverage_by_horizon"] = by_horizon(calibrated_covered)
+                    result["calibrated_interval_coverage_by_feature"] = by_feature(calibrated_feature_covered)
+                    result["calibrated_interval_coverage_by_horizon_feature"] = by_cell(calibrated_cell_covered)
+                    result["calibrated_interval_below_by_feature"] = by_feature(calibrated_feature_below)
+                    result["calibrated_interval_above_by_feature"] = by_feature(calibrated_feature_above)
                     result["calibrated_interval_width_by_horizon"] = by_horizon(calibrated_width)
                     result["calibrated_interval_width_by_feature"] = by_feature(calibrated_feature_width)
         return result

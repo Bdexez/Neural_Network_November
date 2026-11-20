@@ -42,6 +42,20 @@ Nous adaptons la [régression quantile conformalisée de Romano et al.](https://
 
 Notre implémentation élargit cet ensemble si nécessaire pour inclure la médiane et garder des bornes ordonnées. Cette extension ne réduit pas sa couverture. Les bornes calculées en FP64 puis ramenées en FP32 sont arrondies vers l'extérieur lorsque nécessaire pour ne pas exclure une cible située sur la limite. Les quantiles internes du réseau ne sont pas recalibrés individuellement.
 
+### Corrections séparées pour les deux queues
+
+L'option `--lower-tail-fraction` ajuste séparément les bornes. Pour une couverture cible `c`, elle fixe avant calibration la fraction `f` du risque total `1-c` allouée à la queue basse ; la queue haute reçoit le reste. Les scores respectifs sont `borne_basse - cible` et `cible - borne_haute`. Leurs rangs sont `ceil((n+1) × (1-(1-c)×f))` et `ceil((n+1) × (1-(1-c)×(1-f)))`. Une correction négative peut resserrer une borne. La méthode suit l'approche à deux queues du [théorème 2 de Romano et al.](https://proceedings.neurips.cc/paper_files/paper/2019/file/5103c3584b063c431bd1268e9b5e76fb-Paper.pdf). La fraction et le modèle doivent être fixés indépendamment des données de calibration ; choisir cette fraction après avoir observé leurs erreurs invaliderait la garantie annoncée.
+
+Sous échangeabilité, les probabilités marginales de manquer par le bas et par le haut sont bornées respectivement par ces deux budgets ; leur somme borne le risque de manquer l'intervalle. Avec `--scope joint`, chaque score est d'abord maximisé sur toutes les coordonnées d'une trajectoire complète : les budgets concernent alors les événements de dépassement sur la trajectoire entière. Les trajectoires incomplètes restent exclues dans ce mode. La normalisation optionnelle `--score-scale width` fonctionne aussi pour les deux scores joints. Ces garanties ne sont pas conditionnelles à l'entrée et ne suivent pas automatiquement d'une série temporelle dépendante.
+
+Chaque rang doit être fini : à 80 % avec `f=0.5`, il faut au moins neuf exemples observés par coordonnée, ou neuf trajectoires complètes en mode joint. Une fraction plus extrême peut demander plus de données ; un effectif insuffisant produit une erreur avant écriture. Les fichiers à deux corrections utilisent le format version 4 ; les versions 1 à 3 restent lisibles. Les sorties indiquent `calibrated_lower_tail_fraction` lorsque cette option est active.
+
+```bash
+.venv/bin/python -m chimera calibrate --checkpoint runs/workstation-refined/model.pt \
+  --data data/calibration.jsonl --coverage 0.8 --lower-tail-fraction 0.5 \
+  --output runs/two-tail-calibration.json
+```
+
 Par défaut, `--scope marginal` conserve une portée marginale par cible, sous échangeabilité entre exemples de calibration et futurs exemples. Elle ne garantit pas la couverture simultanée d'une trajectoire entière, ni une couverture conditionnelle de 80 % pour chaque entrée. Des fenêtres temporelles successives ou un changement de régime ne satisfont pas automatiquement ces hypothèses.
 
 `--scope joint` propose une autre cible : couvrir simultanément tous les horizons et variables d'une trajectoire. Pour chaque exemple complet, le score est le maximum des scores CQR sur toutes ses coordonnées ; une correction commune est choisie au même rang conformel, puis appliquée à toutes les bornes. L'utilisation d'un score maximal pour une région couvrant une trajectoire est une approche de [prédiction conformelle multivariée](https://ojs.aaai.org/index.php/AAAI/article/download/30089/31918). Les coordonnées de grandes unités peuvent dominer ce score et rendre les autres intervalles larges.
@@ -67,9 +81,29 @@ L'évaluation ajoute `forecast_complete_examples`, `forecast_joint_interval_cove
 
 L'évaluation affiche couverture et largeur, globalement et par horizon, ainsi que la largeur par variable (`forecast_interval_width_by_feature` et `calibrated_interval_width_by_feature`). Elle ajoute aussi le [score d'intervalle de Gneiting et Raftery](https://sites.stat.washington.edu/raftery/Research/PDF/Gneiting2007jasa.pdf), orienté vers les petites valeurs : `largeur + 2/(1-c) × erreurs hors intervalle`. C'est le score d'un intervalle central de niveau `c`, y compris lorsque les quantiles de départ sont asymétriques. Il pénalise à la fois les intervalles trop larges et les observations manquées. Comparer les scores à couverture nominale identique.
 
+Pour une calibration marginale à deux queues et fraction `f`, le score utilise `largeur + erreur_basse/((1-c)×f) + erreur_haute/((1-c)×(1-f))`. Il coïncide avec le score central ci-dessus pour `f=0.5`. Les scores obtenus avec des répartitions différentes n'évaluent pas le même objectif et ne doivent pas être comparés directement.
+
 Pour identifier les disparités masquées par une moyenne, les rapports fournissent aussi les effectifs observés et la MAE par horizon, par variable et par couple `[horizon, variable]`, ainsi que la couverture brute et calibrée des intervalles par variable et par couple. Les champs `forecast_interval_below_by_feature` et `forecast_interval_above_by_feature`, et leurs équivalents `calibrated_…`, indiquent les fractions strictement sous et au-dessus des bornes ; une cible sur une borne est comptée comme couverte. Une coordonnée sans cible finie a un effectif nul et une mesure `null`.
 
 Les quantiles bruts sont décrits par `forecast_quantile_levels`, `forecast_quantile_coverage` et `forecast_pinball_by_quantile`. La couverture est la fraction observée de cibles inférieures ou égales à la prévision de chaque quantile ; le score pinball moyen est d'autant meilleur qu'il est petit. Les versions `forecast_quantile_coverage_by_feature` et `forecast_pinball_by_feature_quantile` ont la forme `[variables, quantiles]`. Elles évaluent les quantiles du réseau, non les bornes calibrées. Dans des distributions avec valeurs ex æquo, la fraction inférieure ou égale peut dépasser le niveau nominal même pour un quantile correct. Ces mesures sont descriptives : les effectifs par coordonnée et la dépendance entre fenêtres doivent être pris en compte avant toute conclusion.
+
+### Comparaison sur chocs asymétriques
+
+Un essai fixe le checkpoint `tiny` du contrôle joint-affine après 180 étapes. Il ajoute aux cibles synthétiques un choc indépendant de forme `0.5 × (-log(max(U, 1e-7)) - 1)`, avec `U` uniforme, sans modifier l'historique d'entrée. Les deux méthodes utilisent les mêmes 1 024 trajectoires de calibration et 2 048 trajectoires de test distinctes. La couverture cible vaut 80 % ; pour les deux queues, `f=0.5` alloue 10 % de risque à chaque côté. Les pourcentages agrègent les douze horizons et trois variables.
+
+| Modalités | Calibration marginale | Couverture | Sous la borne | Au-dessus de la borne | Largeur | Score central |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Séries seules | Correction commune | 79,80 % | 11,83 % | 8,37 % | 1,4373 | 2,0552 |
+| Séries seules | Deux queues | 79,79 % | 10,11 % | 10,10 % | 1,3751 | 2,0281 |
+| Trois modalités | Correction commune | 79,74 % | 11,60 % | 8,66 % | 1,4520 | 2,0692 |
+| Trois modalités | Deux queues | 79,65 % | 10,22 % | 10,13 % | 1,4043 | 2,0491 |
+
+Dans cet essai, les corrections séparées équilibrent davantage les erreurs et réduisent la largeur moyenne. Une mesure finie peut dépasser un budget nominal, comme ici pour certaines queues ; ces résultats ne démontrent pas une garantie conditionnelle ou une efficacité sur d'autres distributions. L'expérience utilise un seul checkpoint et des chocs synthétiques. Les [mesures complètes](artifacts/tail-calibration-study.json) contiennent les corrections, effectifs et empreinte du checkpoint. Reproduction :
+
+```bash
+.venv/bin/python tools/benchmark_tail_calibration.py \
+  --checkpoint runs/joint-affine-pilot/control/latest.pt --output runs/tail-calibration-study.json
+```
 
 ## Comparaison avec des échelles différentes
 

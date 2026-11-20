@@ -20,6 +20,7 @@ from .augmentation import SeriesAffineAugmentation, SeriesAugmentation
 from .data import JointDataset, collate_records, synthetic_batch
 from .model import Chimera
 from .modalities import MODALITIES, balanced_modalities, has_observed_targets, keep_modalities
+from .modality_batch_sampler import ModalityBatchSampler
 from .observed_objective import observed_objective, target_counts
 from .routing_metrics import summarize_expert_usage
 from .evaluation import evaluate
@@ -236,6 +237,11 @@ def train(args, config):
         raise ValueError("loss_normalization doit être batch ou observed")
     if args.resume and args.loss_normalization != previous_normalization:
         raise ValueError(f"Reprise : loss_normalization diffère du checkpoint ({previous_normalization!r})")
+    previous_mixed = previous.get("mixed_modalities", False)
+    requested_mixed = getattr(args, "mixed_modalities", None)
+    if args.resume and requested_mixed is not None and requested_mixed != previous_mixed:
+        raise ValueError(f"Reprise : mixed_modalities diffère du checkpoint ({previous_mixed!r})")
+    args.mixed_modalities = previous_mixed if requested_mixed is None else requested_mixed
     augmentation_options = {}
     previous_augmentation = previous.get("series_augmentation", {})
     for name, default in SeriesAugmentation().to_dict().items():
@@ -262,12 +268,13 @@ def train(args, config):
     keys = ("steps", "batch_size", "accumulation", "seed", "lr", "warmup", "weight_decay",
             "amp", "data", "modality_dropout", "modality_policy", "shuffle", "val_data", "eval_every", "patience", "min_delta", "monitor", "loss_normalization")
     trainer = {key: getattr(args, key) for key in keys}
+    trainer["mixed_modalities"] = args.mixed_modalities
     trainer["initialization"] = previous.get("initialization", initialization)
     trainer["series_augmentation"] = augment_series.to_dict()
     trainer["series_affine_augmentation"] = augment_affine.to_dict()
     trainer["world_size"] = world
-    dataset = JointDataset(args.data, config) if args.data else None
-    validation = JointDataset(args.val_data, config) if args.val_data else None
+    dataset = JointDataset(args.data, config, allow_mixed=args.mixed_modalities) if args.data else None
+    validation = JointDataset(args.val_data, config, allow_mixed=args.mixed_modalities) if args.val_data else None
     trainer["data_fingerprint"] = dataset.fingerprint if dataset is not None else None
     trainer["validation_fingerprint"] = validation.fingerprint if validation is not None else None
     trainer["data_images_fingerprint"] = dataset.image_fingerprint if dataset is not None else None
@@ -329,10 +336,16 @@ def train(args, config):
     sampler = loader = iterator = None
     epoch = 0
     if dataset is not None:
-        sampler = DistributedSampler(dataset, num_replicas=world, rank=rank, seed=args.seed, shuffle=args.shuffle)
-        loader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=collate_records,
-                            sampler=sampler, num_workers=args.workers,
-                            generator=torch.Generator().manual_seed(args.seed))
+        if args.mixed_modalities:
+            sampler = ModalityBatchSampler(dataset, args.batch_size, num_replicas=world, rank=rank,
+                                           seed=args.seed, shuffle=args.shuffle)
+            loader = DataLoader(dataset, batch_sampler=sampler, collate_fn=collate_records,
+                                num_workers=args.workers, generator=torch.Generator().manual_seed(args.seed))
+        else:
+            sampler = DistributedSampler(dataset, num_replicas=world, rank=rank, seed=args.seed, shuffle=args.shuffle)
+            loader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=collate_records,
+                                sampler=sampler, num_workers=args.workers,
+                                generator=torch.Generator().manual_seed(args.seed))
         epoch, skip = divmod(start * args.accumulation, len(loader))
         sampler.set_epoch(epoch)
         iterator = iter(loader)
@@ -343,10 +356,15 @@ def train(args, config):
     if rank == 0:
         output_dir.mkdir(parents=True, exist_ok=True)
         config.save(output_dir / "config.json")
-        val = (DataLoader(validation, batch_size=args.batch_size, collate_fn=collate_records,
-                          num_workers=args.workers, generator=torch.Generator().manual_seed(args.seed + 1))
-               if validation is not None else [synthetic_batch(config, batch_size=args.batch_size,
-                                                               seed=1000000 + args.seed)])
+        if validation is None:
+            val = [synthetic_batch(config, batch_size=args.batch_size, seed=1000000 + args.seed)]
+        elif args.mixed_modalities:
+            validation_sampler = ModalityBatchSampler(validation, args.batch_size, shuffle=False)
+            val = DataLoader(validation, batch_sampler=validation_sampler, collate_fn=collate_records,
+                             num_workers=args.workers, generator=torch.Generator().manual_seed(args.seed + 1))
+        else:
+            val = DataLoader(validation, batch_size=args.batch_size, collate_fn=collate_records,
+                             num_workers=args.workers, generator=torch.Generator().manual_seed(args.seed + 1))
     autocast = (lambda: nullcontext()) if args.amp == "none" else (
         lambda: torch.autocast(device.type, dtype=torch.bfloat16 if args.amp == "bf16" else torch.float16)
     )

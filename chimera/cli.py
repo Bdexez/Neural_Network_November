@@ -171,6 +171,8 @@ def main(argv=None):
                           help="Amplitude maximale du décalage de niveau (défaut : 20)")
     training.add_argument("--device", default="cpu")
     training.add_argument("--amp", choices=("none", "bf16", "fp16"), default="none")
+    training.add_argument("--mixed-modalities", action=argparse.BooleanOptionalAction, default=None,
+                          help="Regrouper en lots les exemples de modalités différentes ; restauré à la reprise")
     training.add_argument("--data", help="Jeu d'entraînement JSONL ; sinon données synthétiques")
     training.add_argument("--val-data", help="Jeu de validation JSONL indépendant")
     initialization = training.add_mutually_exclusive_group()

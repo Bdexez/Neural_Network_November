@@ -1,7 +1,5 @@
 """Lots homogènes de modalités pour des jeux JSONL hétérogènes."""
 from array import array
-import math
-
 import torch
 from torch.utils.data import Sampler
 
@@ -25,7 +23,7 @@ class ModalityBatchSampler(Sampler):
         self.global_batches = sum((len(group) + batch_size - 1) // batch_size for group in self.groups)
         if not self.global_batches:
             raise ValueError('Le jeu ne contient aucun exemple')
-        self.batches_per_rank = math.ceil(self.global_batches / num_replicas)
+        self.batches_per_rank = (self.global_batches + num_replicas - 1) // num_replicas
 
     def set_epoch(self, epoch):
         if type(epoch) is not int or epoch < 0:

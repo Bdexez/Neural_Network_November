@@ -11,6 +11,7 @@ import unittest
 import torch
 
 from chimera import Chimera, ChimeraConfig
+from chimera.binomial import wilson_interval
 from chimera.cli import main
 from chimera.data import synthetic_batch
 from chimera.series_set import SeriesPredictionSet, class_scores, conformal_threshold, fit_series_set
@@ -169,6 +170,33 @@ class SeriesSetTests(unittest.TestCase):
             self.assertEqual(result['series_prediction_set_labeled_examples'],24)
             self.assertEqual(sum(result['series_prediction_set_counts_by_class']),24)
             self.assertGreaterEqual(result['series_prediction_set_mean_size'],1.)
+            self.assertNotIn('iid_classification_confidence_intervals', result)
+            main(['evaluate',*common,'--series-probability',str(temp),'--series-set',str(sets),
+                  '--iid-intervals','--output',str(report)])
+            intervals = json.loads(report.read_text())['iid_classification_confidence_intervals']
+            self.assertEqual(intervals['method'], 'wilson')
+            low, high = intervals['series_prediction_set_coverage']
+            self.assertLessEqual(low, result['series_prediction_set_coverage'])
+            self.assertGreaterEqual(high, result['series_prediction_set_coverage'])
+            self.assertEqual(len(intervals['series_prediction_set_coverage_by_class']),config.num_classes)
+            labels = [json.loads(line)['class_label'] for line in test.read_text().splitlines()]
+            hits = sum(label in row['series_prediction_set'] for label, row in zip(labels, after))
+            self.assertEqual(intervals['series_prediction_set_coverage'], wilson_interval(hits, len(labels)))
+            for class_id in range(config.num_classes):
+                group = [(label, row) for label, row in zip(labels, after) if label == class_id]
+                successes = sum(label in row['series_prediction_set'] for label, row in group)
+                self.assertEqual(intervals['series_prediction_set_coverage_by_class'][class_id],
+                                 wilson_interval(successes, len(group)))
+            unlabeled = root / 'unlabeled.jsonl'
+            rows = [json.loads(line) for line in test.read_text().splitlines()]
+            for row in rows:
+                del row['class_label']
+            unlabeled.write_text('\n'.join(json.dumps(row) for row in rows))
+            main(['evaluate',*common,'--data',str(unlabeled),'--series-probability',str(temp),
+                  '--series-set',str(sets),'--iid-intervals','--output',str(report)])
+            empty_intervals = json.loads(report.read_text())['iid_classification_confidence_intervals']
+            self.assertIsNone(empty_intervals['series_prediction_set_coverage'])
+            self.assertEqual(empty_intervals['series_prediction_set_coverage_by_class'], [None] * config.num_classes)
             saved = sets.read_bytes()
             for reused in (train,tuning):
                 with self.assertRaisesRegex(ValueError,'identique'):

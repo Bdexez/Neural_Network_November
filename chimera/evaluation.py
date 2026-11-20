@@ -6,12 +6,13 @@ import math
 
 import torch
 
+from .binomial import wilson_interval
 from .routing_metrics import summarize_expert_usage
 from .probability_metrics import ProbabilityMetrics
 from .series_probability import log_probabilities
 
 
-def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=None, series_probability=None, series_set=None):
+def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=None, series_probability=None, series_set=None, iid_intervals=False):
     if amp not in ("none", "bf16", "fp16"):
         raise ValueError("amp doit être none, bf16 ou fp16")
     if calibration is not None:
@@ -271,6 +272,19 @@ def evaluate(model, batches, amp="none", *, calibration=None, series_classifier=
                           series_prediction_set_counts_by_class=set_class_counts.tolist(),
                           series_prediction_set_coverage_by_class=[hits.item() / count.item() if count else None
                               for hits, count in zip(set_class_covered, set_class_counts)])
+        if iid_intervals:
+            intervals = dict(method="wilson", confidence=.95,
+                             accuracy=wilson_interval(correct, class_count))
+            if series_classifier is not None:
+                intervals["series_classifier_accuracy"] = wilson_interval(series_class_correct, series_class_count)
+            if series_set is not None:
+                intervals["series_prediction_set_coverage"] = wilson_interval(set_covered, set_labeled)
+                intervals["series_prediction_set_coverage_by_class"] = [
+                    wilson_interval(hits.item(), count.item())
+                    for hits, count in zip(set_class_covered, set_class_counts)]
+                intervals["series_prediction_set_singleton_accuracy"] = wilson_interval(
+                    set_correct_singletons, set_labeled_singletons)
+            result["iid_classification_confidence_intervals"] = intervals
         if "loss" in result:
             # Chaque tâche est d'abord agrégée selon son nombre de cibles ; les
             # termes auxiliaires conservent leur agrégation par lot existante.

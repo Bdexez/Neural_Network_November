@@ -196,6 +196,8 @@ def main(argv=None):
     evaluation.add_argument("--series-classifier", help="Mesurer aussi la tête de classification temporelle")
     evaluation.add_argument("--series-probability", help="Mesurer aussi ses probabilités calibrées")
     evaluation.add_argument("--series-set", help="Mesurer les ensembles conformes de classes")
+    evaluation.add_argument("--iid-intervals", action="store_true",
+                            help="Intervalles de Wilson : suppose des exemples de test indépendants et identiquement distribués")
     set_fit = commands.add_parser("calibrate-series-set", help="Calibrer les ensembles conformes de classes")
     set_fit.add_argument("--checkpoint", required=True)
     set_fit.add_argument("--series-classifier", required=True)
@@ -596,7 +598,7 @@ def main(argv=None):
         if series_set is not None:
             series_set.validate_files(args.checkpoint, args.series_classifier, args.series_probability)
         report = evaluate(model, loader, args.amp, calibration=calibration, series_classifier=series_classifier,
-                          series_probability=series_probability, series_set=series_set)
+                          series_probability=series_probability, series_set=series_set, iid_intervals=args.iid_intervals)
         if calibration is not None:
             identical = (dataset.fingerprint == calibration.dataset_sha256
                          if calibration.dataset_sha256 is not None else None)

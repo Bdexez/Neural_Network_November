@@ -129,6 +129,17 @@ class MixedModalityTrainingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'un jeu data'):
                 main(common + ['--mixed-modalities'])
 
+    def test_shared_batch_interval_requires_positive_value_and_shared_mode(self):
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            root = Path(directory)
+            config, data = make_data(root)
+            common = ['--threads', '2', 'train', '--config', str(config), '--data', str(data), '--steps', '1',
+                      '--mixed-modalities', '--output', str(root / 'run')]
+            with self.assertRaisesRegex(ValueError, 'nécessite shared_modality_batches'):
+                main(common + ['--shared-modality-batch-interval', '2'])
+            with self.assertRaisesRegex(ValueError, 'entier >= 1'):
+                main(common + ['--shared-modality-batches', '--shared-modality-batch-interval', '0'])
+
     def test_legacy_resume_preserves_disabled_cross_rank_views(self):
         with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             root = Path(directory)

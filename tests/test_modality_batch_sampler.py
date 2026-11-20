@@ -1,4 +1,6 @@
+from array import array
 from collections import Counter
+from types import SimpleNamespace
 import json
 from pathlib import Path
 import tempfile
@@ -75,6 +77,44 @@ class ModalityBatchSamplerTests(unittest.TestCase):
             self.assertEqual(len(samplers[0]), 6)
         with self.assertRaises(ValueError):
             ModalityBatchSampler(self.dataset, 2, shared_across_ranks=1)
+
+    def test_periodic_sharing_covers_batches_and_has_equal_rank_lengths(self):
+        class Stub:
+            def __init__(self, count):
+                self.signatures = array('B', [1] * count)
+            def __len__(self):
+                return len(self.signatures)
+        for count in range(1, 18):
+            for world in range(1, 5):
+                for interval in range(1, 7):
+                    dataset = Stub(count)
+                    samplers = [ModalityBatchSampler(dataset, 1, num_replicas=world, rank=rank,
+                                                     shuffle=False, shared_across_ranks=True,
+                                                     shared_interval=interval) for rank in range(world)]
+                    batches = [list(sampler) for sampler in samplers]
+                    with self.subTest(count=count, world=world, interval=interval):
+                        self.assertEqual({len(row) for row in batches}, {len(samplers[0])})
+                        self.assertEqual({item[0] for row in batches for item in row}, set(range(count)))
+                        for step in range(len(batches[0])):
+                            if step % interval == 0:
+                                self.assertTrue(all(row[step] == batches[0][step] for row in batches))
+                            elif world <= count and step * world < count:
+                                self.assertEqual(len({row[step][0] for row in batches}), world)
+        for invalid in (0, -1, 1.5, True):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                ModalityBatchSampler(self.dataset, 2, shared_across_ranks=True, shared_interval=invalid)
+        with self.assertRaises(ValueError):
+            ModalityBatchSampler(self.dataset, 2, shared_interval=2)
+
+    def test_periodic_schedule_consumes_shared_and_distinct_batches_in_order(self):
+        class Stub:
+            signatures = array('B', [1] * 9)
+            def __len__(self):
+                return len(self.signatures)
+        rows = [list(ModalityBatchSampler(Stub(), 1, num_replicas=2, rank=rank, shuffle=False,
+                                          shared_across_ranks=True, shared_interval=2)) for rank in (0, 1)]
+        self.assertEqual(rows[0], [[0], [1], [3], [4], [6], [7]])
+        self.assertEqual(rows[1], [[0], [2], [3], [5], [6], [8]])
 
     def test_deterministic_epoch_and_rng_independence(self):
         sampler = ModalityBatchSampler(self.dataset, 2, seed=123)

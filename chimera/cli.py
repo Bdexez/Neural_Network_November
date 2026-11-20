@@ -172,6 +172,8 @@ def main(argv=None):
                           help="Amplitude maximale du décalage de niveau (défaut : 20)")
     training.add_argument("--device", default="cpu")
     training.add_argument("--amp", choices=("none", "bf16", "fp16"), default="none")
+    training.add_argument("--shared-modality-batch-interval", type=int,
+                          help="Partager un lot tous les N micro-lots de l'époque (défaut : 1)")
     training.add_argument("--shared-modality-batches", action=argparse.BooleanOptionalAction, default=None,
                           help="Présenter les mêmes lots aux rangs distribués ; restauré à la reprise")
     training.add_argument("--alignment-cross-rank-views", action=argparse.BooleanOptionalAction, default=None,

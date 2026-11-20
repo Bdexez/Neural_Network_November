@@ -272,6 +272,18 @@ def train(args, config):
         args.shared_modality_batches = False if requested_shared_batches is None else requested_shared_batches
     if args.shared_modality_batches and (not args.mixed_modalities or not args.data):
         raise ValueError("shared_modality_batches nécessite mixed_modalities et un jeu data")
+    previous_shared_interval = previous.get("shared_modality_batch_interval", 1)
+    requested_shared_interval = getattr(args, "shared_modality_batch_interval", None)
+    if args.resume:
+        if requested_shared_interval is not None and requested_shared_interval != previous_shared_interval:
+            raise ValueError(f"Reprise : shared_modality_batch_interval diffère du checkpoint ({previous_shared_interval!r})")
+        args.shared_modality_batch_interval = previous_shared_interval
+    else:
+        args.shared_modality_batch_interval = 1 if requested_shared_interval is None else requested_shared_interval
+    if type(args.shared_modality_batch_interval) is not int or args.shared_modality_batch_interval < 1:
+        raise ValueError("shared_modality_batch_interval doit être un entier >= 1")
+    if not args.shared_modality_batches and args.shared_modality_batch_interval != 1:
+        raise ValueError("shared_modality_batch_interval nécessite shared_modality_batches")
     augmentation_options = {}
     previous_augmentation = previous.get("series_augmentation", {})
     for name, default in SeriesAugmentation().to_dict().items():
@@ -302,6 +314,7 @@ def train(args, config):
     trainer["alignment_duplicate_positives"] = args.alignment_duplicate_positives
     trainer["alignment_cross_rank_views"] = args.alignment_cross_rank_views
     trainer["shared_modality_batches"] = args.shared_modality_batches
+    trainer["shared_modality_batch_interval"] = args.shared_modality_batch_interval
     trainer["initialization"] = previous.get("initialization", initialization)
     trainer["series_augmentation"] = augment_series.to_dict()
     trainer["series_affine_augmentation"] = augment_affine.to_dict()
@@ -373,7 +386,8 @@ def train(args, config):
         if args.mixed_modalities:
             sampler = ModalityBatchSampler(dataset, args.batch_size, num_replicas=world, rank=rank,
                                            seed=args.seed, shuffle=args.shuffle,
-                                           shared_across_ranks=args.shared_modality_batches)
+                                           shared_across_ranks=args.shared_modality_batches,
+                                           shared_interval=args.shared_modality_batch_interval)
             loader = DataLoader(dataset, batch_sampler=sampler, collate_fn=collate_records,
                                 num_workers=args.workers, generator=torch.Generator().manual_seed(args.seed))
         else:

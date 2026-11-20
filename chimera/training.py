@@ -262,6 +262,16 @@ def train(args, config):
                                            if requested_cross_views is None else requested_cross_views)
     if args.alignment_cross_rank_views and not args.alignment_duplicate_positives:
         raise ValueError("alignment_cross_rank_views nécessite alignment_duplicate_positives")
+    previous_shared_batches = previous.get("shared_modality_batches", False)
+    requested_shared_batches = getattr(args, "shared_modality_batches", None)
+    if args.resume:
+        if requested_shared_batches is not None and requested_shared_batches != previous_shared_batches:
+            raise ValueError(f"Reprise : shared_modality_batches diffère du checkpoint ({previous_shared_batches!r})")
+        args.shared_modality_batches = previous_shared_batches
+    else:
+        args.shared_modality_batches = False if requested_shared_batches is None else requested_shared_batches
+    if args.shared_modality_batches and (not args.mixed_modalities or not args.data):
+        raise ValueError("shared_modality_batches nécessite mixed_modalities et un jeu data")
     augmentation_options = {}
     previous_augmentation = previous.get("series_augmentation", {})
     for name, default in SeriesAugmentation().to_dict().items():
@@ -291,6 +301,7 @@ def train(args, config):
     trainer["mixed_modalities"] = args.mixed_modalities
     trainer["alignment_duplicate_positives"] = args.alignment_duplicate_positives
     trainer["alignment_cross_rank_views"] = args.alignment_cross_rank_views
+    trainer["shared_modality_batches"] = args.shared_modality_batches
     trainer["initialization"] = previous.get("initialization", initialization)
     trainer["series_augmentation"] = augment_series.to_dict()
     trainer["series_affine_augmentation"] = augment_affine.to_dict()
@@ -361,7 +372,8 @@ def train(args, config):
     if dataset is not None:
         if args.mixed_modalities:
             sampler = ModalityBatchSampler(dataset, args.batch_size, num_replicas=world, rank=rank,
-                                           seed=args.seed, shuffle=args.shuffle)
+                                           seed=args.seed, shuffle=args.shuffle,
+                                           shared_across_ranks=args.shared_modality_batches)
             loader = DataLoader(dataset, batch_sampler=sampler, collate_fn=collate_records,
                                 num_workers=args.workers, generator=torch.Generator().manual_seed(args.seed))
         else:

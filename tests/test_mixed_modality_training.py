@@ -108,13 +108,26 @@ class MixedModalityTrainingTests(unittest.TestCase):
             checkpoint = legacy / 'latest.pt'
             payload = torch.load(checkpoint, weights_only=False)
             del payload['trainer']['alignment_duplicate_positives']
+            del payload['trainer']['shared_modality_batches']
             torch.save(payload, checkpoint)
             main(common + ['--output', str(legacy), '--resume', str(checkpoint)])
             expected, _ = load_checkpoint(continuous / 'latest.pt')
             actual, restored = load_checkpoint(checkpoint)
             self.assertFalse(restored['trainer']['alignment_duplicate_positives'])
+            self.assertFalse(restored['trainer']['shared_modality_batches'])
             for name, value in expected.state_dict().items():
                 torch.testing.assert_close(value, actual.state_dict()[name], rtol=0, atol=0, msg=name)
+
+    def test_shared_batches_require_mixed_jsonl(self):
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            root = Path(directory)
+            config, data = make_data(root)
+            common = ['--threads', '2', 'train', '--config', str(config), '--steps', '1',
+                      '--shared-modality-batches', '--output', str(root / 'run')]
+            with self.assertRaisesRegex(ValueError, 'nécessite mixed_modalities'):
+                main(common + ['--data', str(data)])
+            with self.assertRaisesRegex(ValueError, 'un jeu data'):
+                main(common + ['--mixed-modalities'])
 
     def test_legacy_resume_preserves_disabled_cross_rank_views(self):
         with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):

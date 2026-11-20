@@ -62,6 +62,20 @@ class ModalityBatchSamplerTests(unittest.TestCase):
         for batch in interleaved:
             self.assertEqual(len({self.dataset.signatures[i] for i in batch}), 1)
 
+    def test_shared_batches_match_across_ranks_without_extra_padding(self):
+        samplers = [ModalityBatchSampler(self.dataset, 2, num_replicas=4, rank=rank, seed=9,
+                                         shared_across_ranks=True) for rank in range(4)]
+        for epoch in (0, 2):
+            for sampler in samplers:
+                sampler.set_epoch(epoch)
+            batches = [list(sampler) for sampler in samplers]
+            self.assertTrue(all(row == batches[0] for row in batches))
+            self.assertEqual(len(batches[0]), 6)
+            self.assertEqual(Counter(index for batch in batches[0] for index in batch), Counter(range(9)))
+            self.assertEqual(len(samplers[0]), 6)
+        with self.assertRaises(ValueError):
+            ModalityBatchSampler(self.dataset, 2, shared_across_ranks=1)
+
     def test_deterministic_epoch_and_rng_independence(self):
         sampler = ModalityBatchSampler(self.dataset, 2, seed=123)
         before = torch.get_rng_state().clone()

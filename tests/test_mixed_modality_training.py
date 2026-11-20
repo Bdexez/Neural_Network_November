@@ -8,11 +8,12 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import torch
 from torch import distributed as dist
 
-from chimera import ChimeraConfig
+from chimera import Chimera, ChimeraConfig
 from chimera.cli import main
 from chimera.training import load_checkpoint
 
@@ -56,6 +57,7 @@ class MixedModalityTrainingTests(unittest.TestCase):
             left, left_payload = load_checkpoint(full / 'latest.pt')
             right, right_payload = load_checkpoint(split / 'latest.pt')
             self.assertTrue(right_payload['trainer']['mixed_modalities'])
+            self.assertTrue(right_payload['trainer']['alignment_duplicate_positives'])
             self.assertEqual(left_payload['trainer']['validation_state'], right_payload['trainer']['validation_state'])
             for name, value in left.state_dict().items():
                 torch.testing.assert_close(value, right.state_dict()[name], rtol=0, atol=0, msg=name)
@@ -63,6 +65,52 @@ class MixedModalityTrainingTests(unittest.TestCase):
             self.assertEqual(report['classified_examples'], 11)
             with self.assertRaisesRegex(ValueError, 'mixed_modalities'):
                 main(common + ['--no-mixed-modalities', '--output', str(split), '--resume', str(split / 'latest.pt')])
+            with self.assertRaisesRegex(ValueError, 'alignment_duplicate_positives'):
+                main(common + ['--no-alignment-duplicate-positives', '--output', str(split),
+                               '--resume', str(split / 'latest.pt')])
+
+    def test_training_supplies_ids_when_enabled(self):
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            root = Path(directory)
+            config, data = make_data(root)
+            original = Chimera.forward
+            seen = []
+            def record(model, *args, **kwargs):
+                if model.training:
+                    value = kwargs.get('alignment_ids')
+                    seen.append(None if value is None else value.detach().cpu().clone())
+                return original(model, *args, **kwargs)
+            common = ['--threads', '2', 'train', '--config', str(config), '--data', str(data), '--steps', '2',
+                      '--batch-size', '2', '--mixed-modalities', '--modality-dropout', '0']
+            with patch.object(Chimera, 'forward', record):
+                main(common + ['--output', str(root / 'enabled')])
+                self.assertEqual(len(seen), 2)
+                self.assertTrue(all(value is not None and value.dtype == torch.long for value in seen))
+                self.assertTrue(all(((value >= 0) & (value < 11)).all() for value in seen))
+                seen.clear()
+                main(common + ['--no-alignment-duplicate-positives', '--output', str(root / 'disabled')])
+                self.assertEqual(seen, [None, None])
+
+    def test_legacy_resume_preserves_disabled_duplicate_policy(self):
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            root = Path(directory)
+            config, data = make_data(root)
+            continuous, legacy = root / 'continuous', root / 'legacy'
+            common = ['--threads', '2', 'train', '--config', str(config), '--data', str(data),
+                      '--steps', '3', '--batch-size', '2', '--modality-dropout', '0']
+            main(common + ['--mixed-modalities', '--no-alignment-duplicate-positives', '--output', str(continuous)])
+            main(common + ['--mixed-modalities', '--no-alignment-duplicate-positives', '--output', str(legacy),
+                           '--stop-after', '1'])
+            checkpoint = legacy / 'latest.pt'
+            payload = torch.load(checkpoint, weights_only=False)
+            del payload['trainer']['alignment_duplicate_positives']
+            torch.save(payload, checkpoint)
+            main(common + ['--output', str(legacy), '--resume', str(checkpoint)])
+            expected, _ = load_checkpoint(continuous / 'latest.pt')
+            actual, restored = load_checkpoint(checkpoint)
+            self.assertFalse(restored['trainer']['alignment_duplicate_positives'])
+            for name, value in expected.state_dict().items():
+                torch.testing.assert_close(value, actual.state_dict()[name], rtol=0, atol=0, msg=name)
 
     @unittest.skipUnless(dist.is_available() and dist.is_gloo_available(), 'Gloo indisponible')
     def test_distributed_mixed_training_global_alignment(self):
@@ -83,6 +131,7 @@ class MixedModalityTrainingTests(unittest.TestCase):
             self.assertEqual(payload['step'], 4)
             self.assertEqual(payload['trainer']['world_size'], 2)
             self.assertTrue(payload['trainer']['mixed_modalities'])
+            self.assertTrue(payload['trainer']['alignment_duplicate_positives'])
             split = root / 'ddp-split'
             base = command[:-2]
             for extra in (['--stop-after', '2'], ['--resume', str(split / 'latest.pt')]):

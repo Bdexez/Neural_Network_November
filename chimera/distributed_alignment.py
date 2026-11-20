@@ -87,6 +87,7 @@ def distributed_alignment_loss(vectors, class_labels, temperature, mode, *, grou
     all_metadata = [torch.empty_like(metadata) for _ in range(world)]
     dist.all_gather(all_metadata, metadata, group=group)
     all_metadata = torch.cat(all_metadata, dim=0)
+    has_ids = ((all_metadata[:, 4] >= 0) & (all_metadata[:, :3] != 0).any(-1)).any().item()
     losses = []
     for first in range(3):
         for second in range(first + 1, 3):
@@ -97,8 +98,7 @@ def distributed_alignment_loss(vectors, class_labels, temperature, mode, *, grou
             with torch.autocast(device_type=sample.device.type, enabled=False):
                 similarity = left @ right.T / temperature
             labels = all_metadata[valid, 3] if mode == "class" else None
-            identities = all_metadata[valid, 4]
-            identities = identities if (identities >= 0).any() else None
+            identities = all_metadata[valid, 4] if has_ids else None
             losses.append(symmetric_contrastive_loss(similarity, labels, sample_ids=identities))
     # Lien explicite au gather même sans paire : tous les rangs participent
     # alors au backward de la collective avec un gradient nul.

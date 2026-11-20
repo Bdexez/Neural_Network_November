@@ -121,6 +121,8 @@ Le gain moyen apparié de recherche est de 4,30 points, avec un écart-type de 1
 
 Le dossier de sortie doit être nouveau. L'outil vérifie que les plages de seeds d'entraînement, de validation et de test de cet essai sont disjointes et conserve les logs et checkpoints locaux de chaque branche.
 
+Les lots répétés pour équilibrer les rangs peuvent présenter plusieurs vues de la même ligne. Les nouveaux entraînements avec `--mixed-modalities` transmettent l'indice stable de chaque ligne comme identité à la perte : les copies de cette ligne sont des positifs supplémentaires, plutôt que des négatifs dans l'alignement `paired`. `--alignment-duplicate-positives` active aussi ce comportement pour un jeu homogène ; l'option négative le désactive et les anciens checkpoints conservent leur réglage à la reprise. Les étiquettes de classe positives restent combinées aux identités lorsqu'elles sont activées. Ces répétitions affectent toujours les autres pertes et les poids des exemples ; les entrées augmentées sont supposées préserver leur correspondance.
+
 ## Vue textuelle isolée pour l'alignement
 
 Par défaut, la représentation textuelle utilisée par la perte d'alignement est le dernier état du décodeur **après** attention croisée vers les latents multimodaux. Elle peut donc dépendre de l'image et de la série qu'elle est censée comparer : elle n'est pas une représentation du texte seul. Les approches contrastives à encodeurs séparés, comme [CLIP](https://proceedings.mlr.press/v139/radford21a.html), illustrent l'intérêt de vues calculées indépendamment.

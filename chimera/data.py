@@ -34,8 +34,9 @@ def file_identity(stat):
 class JointDataset(Dataset):
     """JSONL local : texte, image, historique et cibles, sans téléchargement implicite."""
 
-    def __init__(self, path, config, *, allow_mixed=False):
+    def __init__(self, path, config, *, allow_mixed=False, include_alignment_ids=False):
         self.path = Path(path).resolve()
+        self.include_alignment_ids = include_alignment_ids
         self.config = config
         initial_identity = file_identity(self.path.stat())
         self.offsets, self.line_numbers = array("Q"), array("Q")
@@ -131,7 +132,11 @@ class JointDataset(Dataset):
                 raise ValueError(f"Le jeu de données a changé pendant sa lecture : {self.path}")
         record = json.loads(line)
         try:
-            return self._convert(record)
+            item = self._convert(record)
+            if self.include_alignment_ids:
+                source_index = index if index >= 0 else len(self) + index
+                item['alignment_ids'] = torch.tensor(source_index, dtype=torch.long)
+            return item
         except (ValueError, TypeError, RuntimeError, OSError) as exc:
             raise ValueError(f"{self.path}:{self.line_numbers[index]}: {exc}") from exc
 
@@ -184,6 +189,11 @@ def collate_records(items):
         present = [name in item for item in items]
         if any(present) and not all(present):
             raise ValueError(f"{name} doit être fourni pour tout le batch")
+    identities = ["alignment_ids" in item for item in items]
+    if any(identities) and not all(identities):
+        raise ValueError("alignment_ids doit être fourni pour tout le batch")
+    if all(identities):
+        result["alignment_ids"] = torch.stack([item["alignment_ids"] for item in items])
     if "images" in items[0]:
         result["images"] = torch.stack([item["images"] for item in items])
     for name, missing in (("class_labels", -100), ("forecast_targets", float("nan"))):

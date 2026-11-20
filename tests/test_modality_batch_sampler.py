@@ -31,6 +31,14 @@ class ModalityBatchSamplerTests(unittest.TestCase):
         self.assertEqual(self.dataset.fingerprint, __import__('hashlib').sha256(self.path.read_bytes()).hexdigest())
         self.assertIn('series', self.dataset[5])
 
+    def test_optional_source_id_is_stable_across_copies_and_negative_indices(self):
+        dataset = JointDataset(self.path, self.config, allow_mixed=True, include_alignment_ids=True)
+        self.assertNotIn('alignment_ids', self.dataset[0])
+        batch = collate_records([dataset[2], dataset[0], dataset[2], dataset[-9]])
+        self.assertEqual(batch['alignment_ids'].tolist(), [2, 0, 2, 0])
+        with self.assertRaisesRegex(ValueError, 'alignment_ids'):
+            collate_records([dataset[0], self.dataset[0]])
+
     def test_every_example_once_and_collation_is_homogeneous(self):
         sampler = ModalityBatchSampler(self.dataset, 2, seed=42)
         batches = list(sampler)

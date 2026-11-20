@@ -242,6 +242,15 @@ def train(args, config):
     if args.resume and requested_mixed is not None and requested_mixed != previous_mixed:
         raise ValueError(f"Reprise : mixed_modalities diffère du checkpoint ({previous_mixed!r})")
     args.mixed_modalities = previous_mixed if requested_mixed is None else requested_mixed
+    previous_duplicates = previous.get("alignment_duplicate_positives", False)
+    requested_duplicates = getattr(args, "alignment_duplicate_positives", None)
+    if args.resume:
+        if requested_duplicates is not None and requested_duplicates != previous_duplicates:
+            raise ValueError(f"Reprise : alignment_duplicate_positives diffère du checkpoint ({previous_duplicates!r})")
+        args.alignment_duplicate_positives = previous_duplicates
+    else:
+        args.alignment_duplicate_positives = (args.mixed_modalities if requested_duplicates is None
+                                               else requested_duplicates)
     augmentation_options = {}
     previous_augmentation = previous.get("series_augmentation", {})
     for name, default in SeriesAugmentation().to_dict().items():
@@ -269,11 +278,13 @@ def train(args, config):
             "amp", "data", "modality_dropout", "modality_policy", "shuffle", "val_data", "eval_every", "patience", "min_delta", "monitor", "loss_normalization")
     trainer = {key: getattr(args, key) for key in keys}
     trainer["mixed_modalities"] = args.mixed_modalities
+    trainer["alignment_duplicate_positives"] = args.alignment_duplicate_positives
     trainer["initialization"] = previous.get("initialization", initialization)
     trainer["series_augmentation"] = augment_series.to_dict()
     trainer["series_affine_augmentation"] = augment_affine.to_dict()
     trainer["world_size"] = world
-    dataset = JointDataset(args.data, config, allow_mixed=args.mixed_modalities) if args.data else None
+    dataset = (JointDataset(args.data, config, allow_mixed=args.mixed_modalities,
+                            include_alignment_ids=args.alignment_duplicate_positives) if args.data else None)
     validation = JointDataset(args.val_data, config, allow_mixed=args.mixed_modalities) if args.val_data else None
     trainer["data_fingerprint"] = dataset.fingerprint if dataset is not None else None
     trainer["validation_fingerprint"] = validation.fingerprint if validation is not None else None

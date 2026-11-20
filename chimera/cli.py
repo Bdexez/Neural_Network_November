@@ -172,6 +172,8 @@ def main(argv=None):
                           help="Amplitude maximale du décalage de niveau (défaut : 20)")
     training.add_argument("--device", default="cpu")
     training.add_argument("--amp", choices=("none", "bf16", "fp16"), default="none")
+    training.add_argument("--alignment-duplicate-positives", action=argparse.BooleanOptionalAction, default=None,
+                          help="Traiter les copies d'une ligne comme positives pour l'alignement")
     training.add_argument("--mixed-modalities", action=argparse.BooleanOptionalAction, default=None,
                           help="Regrouper en lots les exemples de modalités différentes ; restauré à la reprise")
     training.add_argument("--data", help="Jeu d'entraînement JSONL ; sinon données synthétiques")
